@@ -403,7 +403,7 @@ export const AdminDashboardPage: React.FC = () => {
                         </span>
                         {geofence ? (
                           <span className="font-semibold text-slate-800">
-                            {geofence.radius}m ({geofence.is_active ? 'Active' : 'Inactive'})
+                            {geofence.radius_meters}m ({geofence.is_active ? 'Active' : 'Inactive'})
                           </span>
                         ) : (
                           <span className="text-amber-600 font-medium text-[11px]">

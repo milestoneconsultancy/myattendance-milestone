@@ -4,25 +4,31 @@ import type { Json } from '../types/database.types'
 export interface LogAuditParams {
   actorId?: string | null
   action: string
-  targetEntity: string
-  targetId?: string | null
-  details?: Record<string, Json | unknown> | null
+  entityType?: string | null
+  entityId?: string | null
+  oldData?: Record<string, Json | unknown> | null
+  newData?: Record<string, Json | unknown> | null
+  remark?: string | null
 }
 
 export async function logAuditEvent({
   actorId,
   action,
-  targetEntity,
-  targetId,
-  details
+  entityType,
+  entityId,
+  oldData,
+  newData,
+  remark
 }: LogAuditParams): Promise<void> {
   try {
     const { error } = await supabase.from('audit_logs').insert({
       actor_id: actorId ?? null,
       action,
-      target_entity: targetEntity,
-      target_id: targetId ?? null,
-      details: (details as Json) ?? null
+      entity_type: entityType ?? null,
+      entity_id: entityId ?? null,
+      old_data: (oldData as Json) ?? null,
+      new_data: (newData as Json) ?? null,
+      remark: remark ?? null
     })
 
     if (error) {
@@ -32,4 +38,5 @@ export async function logAuditEvent({
     console.warn('[AuditService] Unexpected error recording audit log:', err)
   }
 }
+
 

@@ -6,6 +6,7 @@ import type { Profile, Device } from '../../types/database.types'
 import { StatusBadge } from '../../components/common/StatusBadge'
 import { LoadingSpinner } from '../../components/common/LoadingSpinner'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
+import { Modal } from '../../components/common/Modal'
 import {
   Users,
   Search,
@@ -13,7 +14,12 @@ import {
   AlertCircle,
   Smartphone,
   SmartphoneNfc,
-  Power
+  Power,
+  Plus,
+  Mail,
+  User,
+  Hash,
+  Phone
 } from 'lucide-react'
 
 export const AdminEmployeesPage: React.FC = () => {
@@ -27,6 +33,16 @@ export const AdminEmployeesPage: React.FC = () => {
 
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
+
+  // Add Employee Modal State
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [addFormData, setAddFormData] = useState({
+    full_name: '',
+    email: '',
+    employee_code: '',
+    phone: ''
+  })
+  const [isSubmittingEmployee, setIsSubmittingEmployee] = useState(false)
 
   // Unbind / Toggle Confirmation
   const [selectedEmp, setSelectedEmp] = useState<Profile | null>(null)
@@ -67,6 +83,93 @@ export const AdminEmployeesPage: React.FC = () => {
     fetchEmployees()
   }, [fetchEmployees])
 
+  // Handle Add Employee Modal
+  const handleOpenAddModal = () => {
+    setAddFormData({
+      full_name: '',
+      email: '',
+      employee_code: '',
+      phone: ''
+    })
+    setIsAddModalOpen(true)
+  }
+
+  const handleAddEmployeeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setErrorMsg(null)
+    setSuccessMsg(null)
+
+    const name = addFormData.full_name.trim()
+    const email = addFormData.email.trim().toLowerCase()
+    const code = addFormData.employee_code.trim().toUpperCase()
+    const phone = addFormData.phone.trim() || null
+
+    if (!name) {
+      setErrorMsg('Employee full name is required.')
+      return
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setErrorMsg('A valid compulsory email address is required.')
+      return
+    }
+    if (!code) {
+      setErrorMsg('Employee / Staff code is required.')
+      return
+    }
+
+    // Duplicate check in existing loaded list
+    const emailExists = employees.some((emp) => emp.email?.toLowerCase() === email)
+    if (emailExists) {
+      setErrorMsg(`An employee with email "${email}" already exists.`)
+      return
+    }
+
+    const codeExists = employees.some((emp) => emp.employee_code?.toUpperCase() === code)
+    if (codeExists) {
+      setErrorMsg(`An employee with staff code "${code}" already exists.`)
+      return
+    }
+
+    setIsSubmittingEmployee(true)
+    try {
+      const newId = crypto.randomUUID()
+      const { data, error } = await supabase
+        .from('profiles')
+        .insert({
+          id: newId,
+          full_name: name,
+          email: email,
+          employee_code: code,
+          phone: phone,
+          role: 'employee',
+          must_change_password: true,
+          is_active: true
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      await logAuditEvent({
+        actorId: user?.id,
+        action: 'EMPLOYEE_CREATE',
+        entityType: 'profiles',
+        entityId: data?.id || newId,
+        newData: { full_name: name, email, employee_code: code, phone },
+        remark: `Created employee profile for ${name}`
+      })
+
+      setSuccessMsg(`Employee account for "${name}" (${code}) created successfully.`)
+      setIsAddModalOpen(false)
+      await fetchEmployees()
+    } catch (err) {
+      console.error('[Employees] Creation failed:', err)
+      setErrorMsg((err as Error).message || 'Failed to create employee profile.')
+    } finally {
+      setIsSubmittingEmployee(false)
+    }
+  }
+
   // Handle Unbind Device
   const handleOpenUnbind = (emp: Profile) => {
     setSelectedEmp(emp)
@@ -103,9 +206,10 @@ export const AdminEmployeesPage: React.FC = () => {
         await logAuditEvent({
           actorId: user?.id,
           action: 'DEVICE_UNBIND',
-          targetEntity: 'devices',
-          targetId: selectedEmp.id,
-          details: { employee_email: selectedEmp.email }
+          entityType: 'devices',
+          entityId: selectedEmp.id,
+          oldData: { employee_email: selectedEmp.email },
+          remark: `Unbound all active devices for ${selectedEmp.full_name}`
         })
 
         setSuccessMsg(`Device unbound successfully for ${selectedEmp.full_name}. The employee can now bind their new device upon login.`)
@@ -124,9 +228,11 @@ export const AdminEmployeesPage: React.FC = () => {
         await logAuditEvent({
           actorId: user?.id,
           action: newStatus ? 'EMPLOYEE_ACTIVATE' : 'EMPLOYEE_DEACTIVATE',
-          targetEntity: 'profiles',
-          targetId: selectedEmp.id,
-          details: { email: selectedEmp.email, new_status: newStatus }
+          entityType: 'profiles',
+          entityId: selectedEmp.id,
+          oldData: { is_active: selectedEmp.is_active },
+          newData: { is_active: newStatus },
+          remark: `Employee account ${newStatus ? 'activated' : 'deactivated'}`
         })
 
         setSuccessMsg(`Employee account for ${selectedEmp.full_name} ${newStatus ? 'activated' : 'deactivated'} successfully.`)
@@ -147,7 +253,7 @@ export const AdminEmployeesPage: React.FC = () => {
   const filteredEmployees = employees.filter((emp) => {
     const matchesSearch =
       emp.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      emp.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (emp.email && emp.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (emp.employee_code && emp.employee_code.toLowerCase().includes(searchTerm.toLowerCase()))
     const matchesStatus =
       statusFilter === 'all'
@@ -170,9 +276,17 @@ export const AdminEmployeesPage: React.FC = () => {
             <h1 className="text-xl font-bold text-slate-900">Employee Management</h1>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            View staff directory, manage device bindings, and monitor account access.
+            View staff directory, create employee profiles, manage device bindings, and monitor account status.
           </p>
         </div>
+
+        <button
+          onClick={handleOpenAddModal}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 transition-colors cursor-pointer"
+        >
+          <Plus className="h-4 w-4" />
+          <span>Add Employee</span>
+        </button>
       </div>
 
       {/* Notifications */}
@@ -334,6 +448,109 @@ export const AdminEmployeesPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ADD EMPLOYEE MODAL */}
+      <Modal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        title="Add New Employee"
+        description="Register a new employee profile in the Milestone Consultancy attendance directory."
+      >
+        <form onSubmit={handleAddEmployeeSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
+              Full Name *
+            </label>
+            <div className="relative">
+              <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                required
+                placeholder="e.g. Rahul Sharma"
+                value={addFormData.full_name}
+                onChange={(e) => setAddFormData({ ...addFormData, full_name: e.target.value })}
+                className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2 pl-9 pr-3 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
+              Email Address (Compulsory) *
+            </label>
+            <div className="relative">
+              <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="email"
+                required
+                placeholder="e.g. rahul@milestoneconsultancy.in"
+                value={addFormData.email}
+                onChange={(e) => setAddFormData({ ...addFormData, email: e.target.value })}
+                className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2 pl-9 pr-3 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
+                Employee / Staff Code *
+              </label>
+              <div className="relative">
+                <Hash className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. EMP001"
+                  value={addFormData.employee_code}
+                  onChange={(e) => setAddFormData({ ...addFormData, employee_code: e.target.value })}
+                  className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2 pl-9 pr-3 text-xs font-mono uppercase text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
+                Phone Number (Optional)
+              </label>
+              <div className="relative">
+                <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="tel"
+                  placeholder="e.g. +91 98765 43210"
+                  value={addFormData.phone}
+                  onChange={(e) => setAddFormData({ ...addFormData, phone: e.target.value })}
+                  className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2 pl-9 pr-3 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-slate-50 p-3 border border-slate-200 text-[11px] text-slate-600 space-y-1">
+            <p className="font-semibold text-slate-800">Account Access Note:</p>
+            <p>
+              The employee account will be active immediately. Upon initial login with their email, they will be prompted to set up their password and register their mobile device.
+            </p>
+          </div>
+
+          <div className="mt-6 flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
+            <button
+              type="button"
+              onClick={() => setIsAddModalOpen(false)}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmittingEmployee}
+              className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 transition-all cursor-pointer"
+            >
+              {isSubmittingEmployee ? 'Creating Account...' : 'Create Employee Profile'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* CONFIRM ACTION DIALOG */}
       <ConfirmDialog

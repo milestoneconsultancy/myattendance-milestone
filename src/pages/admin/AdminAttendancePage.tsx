@@ -241,11 +241,16 @@ export const AdminAttendancePage: React.FC = () => {
         const { error: adjErr } = await supabase
           .from('attendance_adjustments')
           .insert({
-            daily_attendance_id: adjustingRecord.id,
-            adjusted_by: user.id,
-            previous_value: previousValue,
-            new_value: newValue,
-            remark: adjustFormData.remark.trim()
+            attendance_id: adjustingRecord.id,
+            changed_by: user.id,
+            old_status: adjustingRecord.status,
+            new_status: adjustFormData.status,
+            old_sign_in_at: adjustingRecord.sign_in_at,
+            new_sign_in_at: signInAt,
+            old_sign_out_at: adjustingRecord.sign_out_at,
+            new_sign_out_at: signOutAt,
+            remark: adjustFormData.remark.trim(),
+            changed_at: new Date().toISOString()
           })
 
         if (adjErr) {
@@ -257,15 +262,11 @@ export const AdminAttendancePage: React.FC = () => {
       await logAuditEvent({
         actorId: user?.id,
         action: 'ATTENDANCE_ADJUSTMENT',
-        targetEntity: 'daily_attendance',
-        targetId: adjustingRecord.id,
-        details: {
-          employee_name: adjustingRecord.employee?.full_name,
-          date: adjustingRecord.attendance_date,
-          previous: previousValue,
-          new: newValue,
-          remark: adjustFormData.remark.trim()
-        }
+        entityType: 'daily_attendance',
+        entityId: adjustingRecord.id,
+        oldData: previousValue,
+        newData: newValue,
+        remark: adjustFormData.remark.trim()
       })
 
       setSuccessMsg(

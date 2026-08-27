@@ -36,7 +36,7 @@ export const AdminAuditLogsPage: React.FC = () => {
         .limit(100)
 
       if (entityFilter !== 'all') {
-        query = query.eq('target_entity', entityFilter)
+        query = query.eq('entity_type', entityFilter)
       }
 
       const { data, error } = await query
@@ -57,11 +57,15 @@ export const AdminAuditLogsPage: React.FC = () => {
   const filteredLogs = logs.filter((log) => {
     const actionStr = log.action.toLowerCase()
     const actorName = log.actor?.full_name?.toLowerCase() || ''
-    const detailsStr = JSON.stringify(log.details || '').toLowerCase()
+    const entityStr = (log.entity_type || '').toLowerCase()
+    const remarkStr = (log.remark || '').toLowerCase()
+    const dataStr = (JSON.stringify(log.new_data || '') + JSON.stringify(log.old_data || '')).toLowerCase()
     return (
       actionStr.includes(searchTerm.toLowerCase()) ||
       actorName.includes(searchTerm.toLowerCase()) ||
-      detailsStr.includes(searchTerm.toLowerCase())
+      entityStr.includes(searchTerm.toLowerCase()) ||
+      remarkStr.includes(searchTerm.toLowerCase()) ||
+      dataStr.includes(searchTerm.toLowerCase())
     )
   })
 
@@ -160,7 +164,7 @@ export const AdminAuditLogsPage: React.FC = () => {
                   <th className="py-3.5 px-4 sm:px-6">Timestamp</th>
                   <th className="py-3.5 px-4">Action</th>
                   <th className="py-3.5 px-4">Admin / Actor</th>
-                  <th className="py-3.5 px-4">Target Entity</th>
+                  <th className="py-3.5 px-4">Entity Type</th>
                   <th className="py-3.5 px-4 sm:px-6">Event Details</th>
                 </tr>
               </thead>
@@ -195,13 +199,22 @@ export const AdminAuditLogsPage: React.FC = () => {
                     <td className="py-4 px-4 font-mono text-[11px] text-slate-600">
                       <span className="inline-flex items-center gap-1 text-slate-700">
                         <Layers className="h-3 w-3 text-slate-400" />
-                        {log.target_entity}
+                        {log.entity_type || '—'}
                       </span>
                     </td>
                     <td className="py-4 px-4 sm:px-6 text-[11px] font-mono text-slate-600">
-                      <pre className="max-w-md truncate bg-slate-50 p-2 rounded-lg border border-slate-200 overflow-x-auto text-[10px]">
-                        {JSON.stringify(log.details, null, 2)}
-                      </pre>
+                      <div className="space-y-1 max-w-md">
+                        {log.remark && (
+                          <p className="font-sans text-slate-800 font-medium text-xs">
+                            💬 {log.remark}
+                          </p>
+                        )}
+                        {(log.new_data || log.old_data) && (
+                          <pre className="bg-slate-50 p-2 rounded-lg border border-slate-200 overflow-x-auto text-[10px]">
+                            {JSON.stringify(log.new_data || log.old_data, null, 2)}
+                          </pre>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -16,37 +16,40 @@ export type Database = {
       profiles: {
         Row: {
           id: string
-          email: string
-          full_name: string
           role: UserRole
-          phone: string | null
+          full_name: string
+          username: string | null
           employee_code: string | null
-          must_change_password: boolean
+          phone: string | null
+          email: string | null
           is_active: boolean
+          must_change_password: boolean
           created_at: string
           updated_at: string
         }
         Insert: {
           id: string
-          email: string
-          full_name: string
           role?: UserRole
-          phone?: string | null
+          full_name: string
+          username?: string | null
           employee_code?: string | null
-          must_change_password?: boolean
+          phone?: string | null
+          email?: string | null
           is_active?: boolean
+          must_change_password?: boolean
           created_at?: string
           updated_at?: string
         }
         Update: {
           id?: string
-          email?: string
-          full_name?: string
           role?: UserRole
-          phone?: string | null
+          full_name?: string
+          username?: string | null
           employee_code?: string | null
-          must_change_password?: boolean
+          phone?: string | null
+          email?: string | null
           is_active?: boolean
+          must_change_password?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -86,9 +89,10 @@ export type Database = {
         Row: {
           id: string
           project_id: string
+          name: string
           latitude: number
           longitude: number
-          radius: number
+          radius_meters: number
           is_active: boolean
           created_at: string
           updated_at: string
@@ -96,9 +100,10 @@ export type Database = {
         Insert: {
           id?: string
           project_id: string
+          name: string
           latitude: number
           longitude: number
-          radius: number
+          radius_meters: number
           is_active?: boolean
           created_at?: string
           updated_at?: string
@@ -106,9 +111,10 @@ export type Database = {
         Update: {
           id?: string
           project_id?: string
+          name?: string
           latitude?: number
           longitude?: number
-          radius?: number
+          radius_meters?: number
           is_active?: boolean
           created_at?: string
           updated_at?: string
@@ -128,22 +134,28 @@ export type Database = {
           id: string
           employee_id: string
           project_id: string
+          assigned_from: string
+          assigned_to: string | null
+          is_active: boolean
           created_at: string
-          assigned_by: string | null
         }
         Insert: {
           id?: string
           employee_id: string
           project_id: string
+          assigned_from?: string
+          assigned_to?: string | null
+          is_active?: boolean
           created_at?: string
-          assigned_by?: string | null
         }
         Update: {
           id?: string
           employee_id?: string
           project_id?: string
+          assigned_from?: string
+          assigned_to?: string | null
+          is_active?: boolean
           created_at?: string
-          assigned_by?: string | null
         }
         Relationships: [
           {
@@ -211,36 +223,39 @@ export type Database = {
           id: string
           employee_id: string
           project_id: string
-          event_type: AttendanceEventType
-          timestamp: string
-          latitude: number
-          longitude: number
-          is_inside_geofence: boolean
+          geofence_id: string | null
           device_id: string | null
+          event_type: AttendanceEventType
+          event_time: string
+          latitude: number | null
+          longitude: number | null
+          distance_meters: number | null
           created_at: string
         }
         Insert: {
           id?: string
           employee_id: string
           project_id: string
-          event_type: AttendanceEventType
-          timestamp?: string
-          latitude: number
-          longitude: number
-          is_inside_geofence: boolean
+          geofence_id?: string | null
           device_id?: string | null
+          event_type: AttendanceEventType
+          event_time?: string
+          latitude?: number | null
+          longitude?: number | null
+          distance_meters?: number | null
           created_at?: string
         }
         Update: {
           id?: string
           employee_id?: string
           project_id?: string
-          event_type?: AttendanceEventType
-          timestamp?: string
-          latitude?: number
-          longitude?: number
-          is_inside_geofence?: boolean
+          geofence_id?: string | null
           device_id?: string | null
+          event_type?: AttendanceEventType
+          event_time?: string
+          latitude?: number | null
+          longitude?: number | null
+          distance_meters?: number | null
           created_at?: string
         }
         Relationships: [
@@ -320,42 +335,54 @@ export type Database = {
       attendance_adjustments: {
         Row: {
           id: string
-          daily_attendance_id: string
-          adjusted_by: string
-          previous_value: Json
-          new_value: Json
+          attendance_id: string
+          changed_by: string
+          old_status: string
+          new_status: string
+          old_sign_in_at: string | null
+          new_sign_in_at: string | null
+          old_sign_out_at: string | null
+          new_sign_out_at: string | null
           remark: string
-          created_at: string
+          changed_at: string
         }
         Insert: {
           id?: string
-          daily_attendance_id: string
-          adjusted_by: string
-          previous_value: Json
-          new_value: Json
+          attendance_id: string
+          changed_by: string
+          old_status: string
+          new_status: string
+          old_sign_in_at?: string | null
+          new_sign_in_at?: string | null
+          old_sign_out_at?: string | null
+          new_sign_out_at?: string | null
           remark: string
-          created_at?: string
+          changed_at?: string
         }
         Update: {
           id?: string
-          daily_attendance_id?: string
-          adjusted_by?: string
-          previous_value?: Json
-          new_value?: Json
+          attendance_id?: string
+          changed_by?: string
+          old_status?: string
+          new_status?: string
+          old_sign_in_at?: string | null
+          new_sign_in_at?: string | null
+          old_sign_out_at?: string | null
+          new_sign_out_at?: string | null
           remark?: string
-          created_at?: string
+          changed_at?: string
         }
         Relationships: [
           {
-            foreignKeyName: 'attendance_adjustments_daily_attendance_id_fkey'
-            columns: ['daily_attendance_id']
+            foreignKeyName: 'attendance_adjustments_attendance_id_fkey'
+            columns: ['attendance_id']
             isOneToOne: false
             referencedRelation: 'daily_attendance'
             referencedColumns: ['id']
           },
           {
-            foreignKeyName: 'attendance_adjustments_adjusted_by_fkey'
-            columns: ['adjusted_by']
+            foreignKeyName: 'attendance_adjustments_changed_by_fkey'
+            columns: ['changed_by']
             isOneToOne: false
             referencedRelation: 'profiles'
             referencedColumns: ['id']
@@ -367,30 +394,33 @@ export type Database = {
           id: string
           actor_id: string | null
           action: string
-          target_entity: string
-          target_id: string | null
-          details: Json | null
-          ip_address: string | null
+          entity_type: string | null
+          entity_id: string | null
+          old_data: Json | null
+          new_data: Json | null
+          remark: string | null
           created_at: string
         }
         Insert: {
           id?: string
           actor_id?: string | null
           action: string
-          target_entity: string
-          target_id?: string | null
-          details?: Json | null
-          ip_address?: string | null
+          entity_type?: string | null
+          entity_id?: string | null
+          old_data?: Json | null
+          new_data?: Json | null
+          remark?: string | null
           created_at?: string
         }
         Update: {
           id?: string
           actor_id?: string | null
           action?: string
-          target_entity?: string
-          target_id?: string | null
-          details?: Json | null
-          ip_address?: string | null
+          entity_type?: string | null
+          entity_id?: string | null
+          old_data?: Json | null
+          new_data?: Json | null
+          remark?: string | null
           created_at?: string
         }
         Relationships: [

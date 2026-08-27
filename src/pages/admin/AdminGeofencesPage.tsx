@@ -46,9 +46,10 @@ export const AdminGeofencesPage: React.FC = () => {
   const [editingGeofence, setEditingGeofence] = useState<GeofenceWithProject | null>(null)
   const [formData, setFormData] = useState({
     project_id: '',
+    name: '',
     latitude: 18.5204, // Default Pune
     longitude: 73.8567,
-    radius: 150, // default 150m
+    radius_meters: 150, // default 150m
     is_active: true
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -104,9 +105,10 @@ export const AdminGeofencesPage: React.FC = () => {
     const firstActiveProject = projects.find((p) => p.is_active)
     setFormData({
       project_id: firstActiveProject ? firstActiveProject.id : '',
+      name: firstActiveProject ? `${firstActiveProject.name} Geofence` : '',
       latitude: 18.5204,
       longitude: 73.8567,
-      radius: 150,
+      radius_meters: 150,
       is_active: true
     })
     setIsModalOpen(true)
@@ -117,9 +119,10 @@ export const AdminGeofencesPage: React.FC = () => {
     setEditingGeofence(geo)
     setFormData({
       project_id: geo.project_id,
+      name: geo.name || (geo.project?.name ? `${geo.project.name} Geofence` : 'Site Geofence'),
       latitude: geo.latitude,
       longitude: geo.longitude,
-      radius: geo.radius,
+      radius_meters: geo.radius_meters,
       is_active: geo.is_active
     })
     setIsModalOpen(true)
@@ -132,7 +135,7 @@ export const AdminGeofencesPage: React.FC = () => {
       setErrorMsg('Please select a project/site for this geofence.')
       return
     }
-    if (!formData.latitude || !formData.longitude || formData.radius <= 0) {
+    if (!formData.latitude || !formData.longitude || formData.radius_meters <= 0) {
       setErrorMsg('Please provide valid latitude, longitude, and positive radius.')
       return
     }
@@ -142,15 +145,21 @@ export const AdminGeofencesPage: React.FC = () => {
     setSuccessMsg(null)
 
     try {
+      const fallbackName = projects.find((p) => p.id === formData.project_id)?.name
+        ? `${projects.find((p) => p.id === formData.project_id)!.name} Geofence`
+        : 'Site Geofence'
+      const geofenceName = formData.name.trim() || fallbackName
+
       if (editingGeofence) {
         // UPDATE GEOFENCE
         const { error } = await supabase
           .from('geofences')
           .update({
             project_id: formData.project_id,
+            name: geofenceName,
             latitude: formData.latitude,
             longitude: formData.longitude,
-            radius: formData.radius,
+            radius_meters: formData.radius_meters,
             is_active: formData.is_active,
             updated_at: new Date().toISOString()
           })
@@ -161,16 +170,17 @@ export const AdminGeofencesPage: React.FC = () => {
         await logAuditEvent({
           actorId: user?.id,
           action: 'GEOFENCE_EDIT',
-          targetEntity: 'geofences',
-          targetId: editingGeofence.id,
-          details: {
-            previous: {
-              latitude: editingGeofence.latitude,
-              longitude: editingGeofence.longitude,
-              radius: editingGeofence.radius
-            },
-            updated: formData
-          }
+          entityType: 'geofences',
+          entityId: editingGeofence.id,
+          oldData: {
+            name: editingGeofence.name,
+            latitude: editingGeofence.latitude,
+            longitude: editingGeofence.longitude,
+            radius_meters: editingGeofence.radius_meters,
+            is_active: editingGeofence.is_active
+          },
+          newData: { ...formData, name: geofenceName },
+          remark: `Updated geofence "${geofenceName}"`
         })
 
         setSuccessMsg('Geofence boundary updated successfully.')
@@ -180,9 +190,10 @@ export const AdminGeofencesPage: React.FC = () => {
           .from('geofences')
           .insert({
             project_id: formData.project_id,
+            name: geofenceName,
             latitude: formData.latitude,
             longitude: formData.longitude,
-            radius: formData.radius,
+            radius_meters: formData.radius_meters,
             is_active: formData.is_active
           })
           .select()
@@ -193,9 +204,10 @@ export const AdminGeofencesPage: React.FC = () => {
         await logAuditEvent({
           actorId: user?.id,
           action: 'GEOFENCE_CREATE',
-          targetEntity: 'geofences',
-          targetId: data?.id,
-          details: formData
+          entityType: 'geofences',
+          entityId: data?.id,
+          newData: { ...formData, name: geofenceName },
+          remark: `Created geofence "${geofenceName}"`
         })
 
         setSuccessMsg('Geofence boundary created successfully.')
@@ -236,9 +248,11 @@ export const AdminGeofencesPage: React.FC = () => {
       await logAuditEvent({
         actorId: user?.id,
         action: newStatus ? 'GEOFENCE_ACTIVATE' : 'GEOFENCE_DEACTIVATE',
-        targetEntity: 'geofences',
-        targetId: confirmGeofence.id,
-        details: { project_id: confirmGeofence.project_id, new_status: newStatus }
+        entityType: 'geofences',
+        entityId: confirmGeofence.id,
+        oldData: { is_active: confirmGeofence.is_active },
+        newData: { is_active: newStatus },
+        remark: `Geofence "${confirmGeofence.name || 'Site'}" ${newStatus ? 'activated' : 'deactivated'}`
       })
 
       setSuccessMsg(
@@ -325,7 +339,7 @@ export const AdminGeofencesPage: React.FC = () => {
               </span>
               {selectedGeofence && (
                 <span className="text-[11px] font-semibold text-slate-500">
-                  Radius: <b className="text-slate-800">{selectedGeofence.radius}m</b>
+                  Radius: <b className="text-slate-800">{selectedGeofence.radius_meters}m</b>
                 </span>
               )}
             </div>
@@ -335,7 +349,7 @@ export const AdminGeofencesPage: React.FC = () => {
                 <GeofenceMap
                   latitude={selectedGeofence.latitude}
                   longitude={selectedGeofence.longitude}
-                  radius={selectedGeofence.radius}
+                  radius_meters={selectedGeofence.radius_meters}
                   siteName={selectedGeofence.project?.name || 'Selected Site'}
                   height="280px"
                 />
@@ -456,7 +470,7 @@ export const AdminGeofencesPage: React.FC = () => {
                         </td>
                         <td className="py-3.5 px-3">
                           <span className="font-mono text-xs font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
-                            {geo.radius}m
+                            {geo.radius_meters}m
                           </span>
                         </td>
                         <td className="py-3.5 px-3 font-mono text-[11px] text-slate-500">
@@ -545,7 +559,7 @@ export const AdminGeofencesPage: React.FC = () => {
             <GeofenceMap
               latitude={formData.latitude}
               longitude={formData.longitude}
-              radius={formData.radius}
+              radius_meters={formData.radius_meters}
               interactive={true}
               onLocationChange={(lat, lng) => {
                 setFormData((prev) => ({
@@ -603,9 +617,9 @@ export const AdminGeofencesPage: React.FC = () => {
                 max="5000"
                 step="10"
                 required
-                value={formData.radius}
+                value={formData.radius_meters}
                 onChange={(e) =>
-                  setFormData({ ...formData, radius: parseInt(e.target.value, 10) || 100 })
+                  setFormData({ ...formData, radius_meters: parseInt(e.target.value, 10) || 100 })
                 }
                 className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2 px-3 text-xs font-mono text-slate-900 focus:border-sky-500 focus:bg-white focus:outline-none"
               />

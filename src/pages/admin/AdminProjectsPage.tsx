@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuth } from '../../hooks/useAuth'
 import { logAuditEvent } from '../../lib/auditService'
-import type { Project } from '../../types/database.types'
+import type { Project, Geofence, EmployeeProjectAssignment } from '../../types/database.types'
 import { Modal } from '../../components/common/Modal'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { StatusBadge } from '../../components/common/StatusBadge'
@@ -17,13 +18,18 @@ import {
   FolderGit2,
   AlertCircle,
   CheckCircle2,
-  Clock
+  MapPin,
+  Users,
+  Navigation,
+  ArrowRight
 } from 'lucide-react'
 
 export const AdminProjectsPage: React.FC = () => {
   const { user } = useAuth()
 
   const [projects, setProjects] = useState<Project[]>([])
+  const [geofences, setGeofences] = useState<Geofence[]>([])
+  const [assignments, setAssignments] = useState<EmployeeProjectAssignment[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
@@ -43,6 +49,10 @@ export const AdminProjectsPage: React.FC = () => {
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
 
+  // View Sites Modal State
+  const [viewSitesProject, setViewSitesProject] = useState<Project | null>(null)
+  const [isSitesModalOpen, setIsSitesModalOpen] = useState(false)
+
   // Confirm Dialog State (Deactivation / Activation)
   const [confirmProject, setConfirmProject] = useState<Project | null>(null)
   const [isConfirmOpen, setIsConfirmOpen] = useState(false)
@@ -52,15 +62,30 @@ export const AdminProjectsPage: React.FC = () => {
     setIsLoading(true)
     setErrorMsg(null)
     try {
-      const { data, error } = await supabase
+      // 1. Fetch Projects
+      const { data: projData, error: projErr } = await supabase
         .from('projects')
         .select('*')
         .order('name', { ascending: true })
 
-      if (error) {
-        throw error
-      }
-      setProjects(data || [])
+      if (projErr) throw projErr
+      setProjects(projData || [])
+
+      // 2. Fetch Geofences / Sites
+      const { data: geoData, error: geoErr } = await supabase
+        .from('geofences')
+        .select('*')
+
+      if (geoErr) throw geoErr
+      setGeofences(geoData || [])
+
+      // 3. Fetch Assignments
+      const { data: assignData, error: assignErr } = await supabase
+        .from('employee_project_assignments')
+        .select('*')
+
+      if (assignErr) throw assignErr
+      setAssignments(assignData || [])
     } catch (err) {
       console.error('[Projects] Error fetching projects:', err)
       setErrorMsg((err as Error).message || 'Failed to load projects from Supabase.')
@@ -72,6 +97,12 @@ export const AdminProjectsPage: React.FC = () => {
   useEffect(() => {
     fetchProjects()
   }, [fetchProjects])
+
+  // Open modal to view Sites under Project
+  const handleOpenSitesModal = (project: Project) => {
+    setViewSitesProject(project)
+    setIsSitesModalOpen(true)
+  }
 
   // Open modal for Create
   const handleOpenCreateModal = () => {
@@ -128,12 +159,11 @@ export const AdminProjectsPage: React.FC = () => {
         await logAuditEvent({
           actorId: user?.id,
           action: 'PROJECT_EDIT',
-          targetEntity: 'projects',
-          targetId: editingProject.id,
-          details: {
-            previous: { name: editingProject.name, code: editingProject.code },
-            updated: formData
-          }
+          entityType: 'projects',
+          entityId: editingProject.id,
+          oldData: { name: editingProject.name, code: editingProject.code, is_active: editingProject.is_active },
+          newData: formData,
+          remark: `Updated project "${formData.name.trim()}"`
         })
 
         setSuccessMsg(`Project "${formData.name.trim()}" updated successfully.`)
@@ -155,9 +185,10 @@ export const AdminProjectsPage: React.FC = () => {
         await logAuditEvent({
           actorId: user?.id,
           action: 'PROJECT_CREATE',
-          targetEntity: 'projects',
-          targetId: data?.id,
-          details: { name: formData.name.trim(), code: formData.code.trim() }
+          entityType: 'projects',
+          entityId: data?.id,
+          newData: formData,
+          remark: `Created project "${formData.name.trim()}"`
         })
 
         setSuccessMsg(`Project "${formData.name.trim()}" created successfully.`)
@@ -198,9 +229,11 @@ export const AdminProjectsPage: React.FC = () => {
       await logAuditEvent({
         actorId: user?.id,
         action: newStatus ? 'PROJECT_ACTIVATE' : 'PROJECT_DEACTIVATE',
-        targetEntity: 'projects',
-        targetId: confirmProject.id,
-        details: { name: confirmProject.name, new_status: newStatus }
+        entityType: 'projects',
+        entityId: confirmProject.id,
+        oldData: { is_active: confirmProject.is_active },
+        newData: { is_active: newStatus },
+        remark: `Project "${confirmProject.name}" ${newStatus ? 'activated' : 'deactivated'}`
       })
 
       setSuccessMsg(
@@ -340,87 +373,177 @@ export const AdminProjectsPage: React.FC = () => {
             <table className="w-full text-left text-xs">
               <thead className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                 <tr>
-                  <th className="py-3.5 px-4 sm:px-6">Project / Site Name</th>
-                  <th className="py-3.5 px-4">Site Code</th>
-                  <th className="py-3.5 px-4">Description</th>
+                  <th className="py-3.5 px-4 sm:px-6">Project Name</th>
+                  <th className="py-3.5 px-4">Code</th>
+                  <th className="py-3.5 px-4">Configured Sites</th>
+                  <th className="py-3.5 px-4">Assigned Employees</th>
                   <th className="py-3.5 px-4">Status</th>
-                  <th className="py-3.5 px-4">Created Date</th>
                   <th className="py-3.5 px-4 sm:px-6 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
-                {filteredProjects.map((project) => (
-                  <tr key={project.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="py-4 px-4 sm:px-6 font-semibold text-slate-900">
-                      <div className="flex items-center gap-2">
-                        <Building2 className="h-4 w-4 text-slate-400 shrink-0" />
-                        <span>{project.name}</span>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4">
-                      {project.code ? (
-                        <span className="font-mono text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
-                          {project.code}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="py-4 px-4 text-slate-500 max-w-xs truncate">
-                      {project.description || '—'}
-                    </td>
-                    <td className="py-4 px-4">
-                      <StatusBadge status={project.is_active} />
-                    </td>
-                    <td className="py-4 px-4 text-slate-500">
-                      <div className="flex items-center gap-1.5">
-                        <Clock className="h-3.5 w-3.5 text-slate-400" />
-                        {new Date(project.created_at).toLocaleDateString('en-IN', {
-                          day: '2-digit',
-                          month: 'short',
-                          year: 'numeric'
-                        })}
-                      </div>
-                    </td>
-                    <td className="py-4 px-4 sm:px-6 text-right">
-                      <div className="flex items-center justify-end gap-2">
+                {filteredProjects.map((project) => {
+                  const projectSites = geofences.filter((g) => g.project_id === project.id)
+                  const projectAssignments = assignments.filter((a) => a.project_id === project.id)
+                  return (
+                    <tr key={project.id} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="py-4 px-4 sm:px-6 font-semibold text-slate-900">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4 text-sky-600 shrink-0" />
+                          <div>
+                            <span className="block font-bold">{project.name}</span>
+                            {project.description && (
+                              <span className="block text-[11px] font-normal text-slate-500 max-w-xs truncate">
+                                {project.description}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-4 px-4">
+                        {project.code ? (
+                          <span className="font-mono text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
+                            {project.code}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+                      <td className="py-4 px-4">
                         <button
-                          onClick={() => handleOpenEditModal(project)}
-                          className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-sky-600 transition-colors cursor-pointer"
-                          title="Edit Project"
+                          onClick={() => handleOpenSitesModal(project)}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-100 transition-colors cursor-pointer"
+                          title="Click to view sites under this project"
                         >
-                          <Edit2 className="h-4 w-4" />
+                          <MapPin className="h-3.5 w-3.5 text-sky-600" />
+                          <span>{projectSites.length} {projectSites.length === 1 ? 'Site' : 'Sites'}</span>
                         </button>
-                        <button
-                          onClick={() => handleToggleStatus(project)}
-                          className={`rounded-lg p-1.5 transition-colors cursor-pointer ${
-                            project.is_active
-                              ? 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'
-                              : 'text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700'
-                          }`}
-                          title={project.is_active ? 'Deactivate Site' : 'Activate Site'}
-                        >
-                          <Power className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="py-4 px-4">
+                        <div className="flex items-center gap-1.5 text-slate-700 font-medium">
+                          <Users className="h-3.5 w-3.5 text-slate-400" />
+                          <span>{projectAssignments.length} {projectAssignments.length === 1 ? 'Staff' : 'Staff'}</span>
+                        </div>
+                      </td>
+                      <td className="py-4 px-4">
+                        <StatusBadge status={project.is_active} />
+                      </td>
+                      <td className="py-4 px-4 sm:px-6 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => handleOpenSitesModal(project)}
+                            className="rounded-lg p-1.5 text-sky-600 hover:bg-sky-50 transition-colors cursor-pointer"
+                            title="View Sites & Geofences"
+                          >
+                            <Navigation className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleOpenEditModal(project)}
+                            className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-sky-600 transition-colors cursor-pointer"
+                            title="Edit Project"
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleToggleStatus(project)}
+                            className={`rounded-lg p-1.5 transition-colors cursor-pointer ${
+                              project.is_active
+                                ? 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'
+                                : 'text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700'
+                            }`}
+                            title={project.is_active ? 'Deactivate Project' : 'Activate Project'}
+                          >
+                            <Power className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
+      {/* VIEW SITES UNDER PROJECT MODAL */}
+      <Modal
+        isOpen={isSitesModalOpen}
+        onClose={() => setIsSitesModalOpen(false)}
+        maxWidth="lg"
+        title={`Sites under ${viewSitesProject?.name || 'Project'}`}
+        description="Physical location sites and geofence perimeters configured for this project."
+      >
+        <div className="space-y-4">
+          {viewSitesProject && (
+            <>
+              {geofences.filter((g) => g.project_id === viewSitesProject.id).length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center bg-slate-50">
+                  <MapPin className="h-8 w-8 text-slate-400 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-slate-700">No Sites Configured Yet</p>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    This project has no active physical site locations or geofences.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 overflow-hidden bg-white">
+                  {geofences
+                    .filter((g) => g.project_id === viewSitesProject.id)
+                    .map((site) => (
+                      <div key={site.id} className="p-3.5 flex items-center justify-between hover:bg-slate-50">
+                        <div className="flex items-center gap-3">
+                          <div className="rounded-lg bg-sky-50 p-2 text-sky-600">
+                            <MapPin className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-xs text-slate-900">{site.name || 'Site Location'}</p>
+                            <p className="text-[11px] font-mono text-slate-500">
+                              Lat: {site.latitude.toFixed(5)}, Lon: {site.longitude.toFixed(5)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[11px] font-semibold text-sky-800 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                            {site.radius_meters}m Radius
+                          </span>
+                          <StatusBadge status={site.is_active} />
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                <Link
+                  to="/admin/geofences"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-sky-600 hover:text-sky-800"
+                >
+                  <span>Manage in Sites & Geofences</span>
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={() => setIsSitesModalOpen(false)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Close
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
+
       {/* CREATE / EDIT PROJECT MODAL */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={editingProject ? 'Edit Project / Site' : 'Create New Project / Site'}
+        title={editingProject ? 'Edit Project' : 'Create New Project'}
         description={
           editingProject
             ? 'Update project details and operational status.'
-            : 'Register a new project or work site for Milestone Consultancy.'
+            : 'Register a new project entity for Milestone Consultancy.'
         }
       >
         <form onSubmit={handleFormSubmit} className="space-y-4">
@@ -431,7 +554,7 @@ export const AdminProjectsPage: React.FC = () => {
             <input
               type="text"
               required
-              placeholder="e.g. Pune Metro Line 3 Site"
+              placeholder="e.g. Milestone Consultancy HQ"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2.5 px-3.5 text-xs text-slate-900 focus:border-sky-500 focus:bg-white focus:outline-none"
@@ -440,11 +563,11 @@ export const AdminProjectsPage: React.FC = () => {
 
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1">
-              Site / Project Code
+              Project Code
             </label>
             <input
               type="text"
-              placeholder="e.g. MC-PUN-01"
+              placeholder="e.g. MC-HQ-01"
               value={formData.code}
               onChange={(e) => setFormData({ ...formData, code: e.target.value })}
               className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2.5 px-3.5 text-xs text-slate-900 font-mono focus:border-sky-500 focus:bg-white focus:outline-none"
@@ -457,7 +580,7 @@ export const AdminProjectsPage: React.FC = () => {
             </label>
             <textarea
               rows={3}
-              placeholder="Site location details, client contact, or project scope..."
+              placeholder="Project scope, client details, or branch information..."
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2.5 px-3.5 text-xs text-slate-900 focus:border-sky-500 focus:bg-white focus:outline-none"
@@ -473,7 +596,7 @@ export const AdminProjectsPage: React.FC = () => {
               className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
             />
             <label htmlFor="is_active" className="text-xs font-medium text-slate-700 cursor-pointer">
-              Site is currently active and accepting attendance
+              Project is currently active
             </label>
           </div>
 
@@ -490,11 +613,7 @@ export const AdminProjectsPage: React.FC = () => {
               disabled={isSubmitting}
               className="rounded-xl bg-sky-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-sky-700 disabled:opacity-50 transition-all cursor-pointer"
             >
-              {isSubmitting
-                ? 'Saving...'
-                : editingProject
-                ? 'Update Project'
-                : 'Create Project'}
+              {isSubmitting ? 'Saving...' : editingProject ? 'Update Project' : 'Create Project'}
             </button>
           </div>
         </form>

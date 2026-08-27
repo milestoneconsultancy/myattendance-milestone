@@ -17,7 +17,8 @@ L.Marker.prototype.options.icon = DefaultIcon
 interface GeofenceMapProps {
   latitude: number
   longitude: number
-  radius: number // in meters
+  radius?: number // in meters (legacy)
+  radius_meters?: number // in meters (canonical production field)
   interactive?: boolean
   onLocationChange?: (lat: number, lng: number) => void
   onRadiusChange?: (radius: number) => void
@@ -29,11 +30,13 @@ export const GeofenceMap: React.FC<GeofenceMapProps> = ({
   latitude,
   longitude,
   radius,
+  radius_meters,
   interactive = false,
   onLocationChange,
   height = '360px',
   siteName = 'Site Location'
 }) => {
+  const currentRadius = radius_meters ?? radius ?? 150
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<L.Map | null>(null)
   const markerRef = useRef<L.Marker | null>(null)
@@ -82,7 +85,7 @@ export const GeofenceMap: React.FC<GeofenceMapProps> = ({
       color: '#0284c7',
       fillColor: '#38bdf8',
       fillOpacity: 0.25,
-      radius: radius || 150,
+      radius: currentRadius,
       weight: 2
     }).addTo(map)
 
@@ -112,10 +115,10 @@ export const GeofenceMap: React.FC<GeofenceMapProps> = ({
 
   // Update circle radius when radius prop changes
   useEffect(() => {
-    if (circleRef.current && radius) {
-      circleRef.current.setRadius(radius)
+    if (circleRef.current && currentRadius) {
+      circleRef.current.setRadius(currentRadius)
     }
-  }, [radius])
+  }, [currentRadius])
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-slate-200 shadow-inner bg-slate-100">
