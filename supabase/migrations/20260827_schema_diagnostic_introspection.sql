@@ -58,3 +58,4 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
     'audit_logs'
   )
 ORDER BY tc.table_name;
+

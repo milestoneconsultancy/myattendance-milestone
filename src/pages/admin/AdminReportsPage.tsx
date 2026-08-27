@@ -23,8 +23,12 @@ export const AdminReportsPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  // Filters
-  const currentMonthStr = new Date().toISOString().slice(0, 7) // YYYY-MM
+  // Filters (IST Timezone)
+  const currentMonthStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit'
+  }).format(new Date()) // YYYY-MM
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr)
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all')
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('all')
