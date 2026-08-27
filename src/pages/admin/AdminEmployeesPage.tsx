@@ -1,0 +1,342 @@
+import React, { useState, useEffect, useCallback } from 'react'
+import { supabase } from '../../lib/supabaseClient'
+import { useAuth } from '../../hooks/useAuth'
+import { logAuditEvent } from '../../lib/auditService'
+import type { Profile, Device } from '../../types/database.types'
+import { StatusBadge } from '../../components/common/StatusBadge'
+import { LoadingSpinner } from '../../components/common/LoadingSpinner'
+import { ConfirmDialog } from '../../components/common/ConfirmDialog'
+import {
+  Users,
+  Search,
+  RefreshCw,
+  AlertCircle,
+  Smartphone,
+  SmartphoneNfc,
+  Power
+} from 'lucide-react'
+
+export const AdminEmployeesPage: React.FC = () => {
+  const { user } = useAuth()
+
+  const [employees, setEmployees] = useState<Profile[]>([])
+  const [devices, setDevices] = useState<Device[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [successMsg, setSuccessMsg] = useState<string | null>(null)
+
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
+
+  // Unbind / Toggle Confirmation
+  const [selectedEmp, setSelectedEmp] = useState<Profile | null>(null)
+  const [actionType, setActionType] = useState<'unbind' | 'toggle_status' | null>(null)
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  const fetchEmployees = useCallback(async () => {
+    setIsLoading(true)
+    setErrorMsg(null)
+    try {
+      // 1. Fetch Employees
+      const { data: empData, error: empErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('role', 'employee')
+        .order('full_name', { ascending: true })
+
+      if (empErr) throw empErr
+      setEmployees(empData || [])
+
+      // 2. Fetch Devices
+      const { data: devData, error: devErr } = await supabase
+        .from('devices')
+        .select('*')
+
+      if (devErr) throw devErr
+      setDevices(devData || [])
+    } catch (err) {
+      console.error('[Employees] Error loading data:', err)
+      setErrorMsg((err as Error).message || 'Failed to load employees from database.')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchEmployees()
+  }, [fetchEmployees])
+
+  // Handle Unbind Device
+  const handleOpenUnbind = (emp: Profile) => {
+    setSelectedEmp(emp)
+    setActionType('unbind')
+    setIsConfirmOpen(true)
+  }
+
+  // Handle Toggle Employee Active Status
+  const handleOpenToggleStatus = (emp: Profile) => {
+    setSelectedEmp(emp)
+    setActionType('toggle_status')
+    setIsConfirmOpen(true)
+  }
+
+  const handleConfirmAction = async () => {
+    if (!selectedEmp || !actionType) return
+    setIsProcessing(true)
+
+    try {
+      if (actionType === 'unbind') {
+        // Unbind all active devices for this employee
+        const { error } = await supabase
+          .from('devices')
+          .update({
+            is_active: false,
+            unbound_at: new Date().toISOString(),
+            unbound_by: user?.id || null
+          })
+          .eq('employee_id', selectedEmp.id)
+          .eq('is_active', true)
+
+        if (error) throw error
+
+        await logAuditEvent({
+          actorId: user?.id,
+          action: 'DEVICE_UNBIND',
+          targetEntity: 'devices',
+          targetId: selectedEmp.id,
+          details: { employee_email: selectedEmp.email }
+        })
+
+        setSuccessMsg(`Device unbound successfully for ${selectedEmp.full_name}. The employee can now bind their new device upon login.`)
+      } else if (actionType === 'toggle_status') {
+        const newStatus = !selectedEmp.is_active
+        const { error } = await supabase
+          .from('profiles')
+          .update({
+            is_active: newStatus,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', selectedEmp.id)
+
+        if (error) throw error
+
+        await logAuditEvent({
+          actorId: user?.id,
+          action: newStatus ? 'EMPLOYEE_ACTIVATE' : 'EMPLOYEE_DEACTIVATE',
+          targetEntity: 'profiles',
+          targetId: selectedEmp.id,
+          details: { email: selectedEmp.email, new_status: newStatus }
+        })
+
+        setSuccessMsg(`Employee account for ${selectedEmp.full_name} ${newStatus ? 'activated' : 'deactivated'} successfully.`)
+      }
+
+      setIsConfirmOpen(false)
+      setSelectedEmp(null)
+      setActionType(null)
+      await fetchEmployees()
+    } catch (err) {
+      console.error('[Employees] Action failed:', err)
+      setErrorMsg((err as Error).message || 'Failed to complete employee operation.')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const filteredEmployees = employees.filter((emp) => {
+    const matchesSearch =
+      emp.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      emp.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (emp.employee_code && emp.employee_code.toLowerCase().includes(searchTerm.toLowerCase()))
+    const matchesStatus =
+      statusFilter === 'all'
+        ? true
+        : statusFilter === 'active'
+        ? emp.is_active
+        : !emp.is_active
+    return matchesSearch && matchesStatus
+  })
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl bg-white p-6 border border-slate-200 shadow-xs">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="rounded-lg bg-indigo-50 p-2 text-indigo-600">
+              <Users className="h-5 w-5" />
+            </div>
+            <h1 className="text-xl font-bold text-slate-900">Employee Management</h1>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            View staff directory, manage device bindings, and monitor account access.
+          </p>
+        </div>
+      </div>
+
+      {/* Notifications */}
+      {successMsg && (
+        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 p-3.5 text-xs font-medium text-emerald-800 border border-emerald-200">
+          <span>{successMsg}</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="flex items-center gap-2 rounded-xl bg-rose-50 p-3.5 text-xs font-medium text-rose-800 border border-rose-200">
+          <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {/* Filters & Search */}
+      <div className="flex flex-col sm:flex-row gap-3 rounded-2xl bg-white p-4 border border-slate-200 shadow-xs">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search by employee name, email, or staff code..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-slate-50/50 py-2 pl-9 pr-3.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-sky-500 focus:bg-white focus:outline-none"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as 'all' | 'active' | 'inactive')}
+            className="rounded-xl border border-slate-200 bg-slate-50/50 py-2 px-3 text-xs font-medium text-slate-700 focus:border-sky-500 focus:bg-white focus:outline-none"
+          >
+            <option value="all">All Employees</option>
+            <option value="active">Active Staff</option>
+            <option value="inactive">Inactive Staff</option>
+          </select>
+
+          <button
+            onClick={fetchEmployees}
+            title="Refresh list"
+            className="rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+      </div>
+
+      {/* Employees Table */}
+      {isLoading ? (
+        <LoadingSpinner message="Loading employee directory..." />
+      ) : filteredEmployees.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center">
+          <Users className="h-10 w-10 text-slate-400 mb-3" />
+          <h3 className="text-sm font-bold text-slate-800">No Employees Found</h3>
+          <p className="mt-1 text-xs text-slate-500 max-w-sm">
+            {searchTerm || statusFilter !== 'all'
+              ? 'No employees match your search criteria.'
+              : 'No employee accounts are registered yet in the profiles table.'}
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th className="py-3.5 px-4 sm:px-6">Employee Name</th>
+                  <th className="py-3.5 px-4">Email</th>
+                  <th className="py-3.5 px-4">Staff Code</th>
+                  <th className="py-3.5 px-4">Device Binding</th>
+                  <th className="py-3.5 px-4">Status</th>
+                  <th className="py-3.5 px-4 sm:px-6 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {filteredEmployees.map((emp) => {
+                  const boundDevice = devices.find((d) => d.employee_id === emp.id && d.is_active)
+                  return (
+                    <tr key={emp.id} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="py-4 px-4 sm:px-6 font-semibold text-slate-900">
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-600 font-bold text-xs">
+                            {emp.full_name.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <span className="block font-bold">{emp.full_name}</span>
+                            {emp.must_change_password && (
+                              <span className="text-[10px] text-amber-600 font-medium">
+                                Temporary Password Pending
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 font-mono text-[11px] text-slate-600">
+                        {emp.email}
+                      </td>
+                      <td className="py-4 px-4 font-mono text-[11px] text-slate-500">
+                        {emp.employee_code || '—'}
+                      </td>
+                      <td className="py-4 px-4">
+                        {boundDevice ? (
+                          <div className="flex items-center gap-1.5 text-emerald-700 font-medium">
+                            <Smartphone className="h-4 w-4 text-emerald-600" />
+                            <span>Linked ({boundDevice.device_name || 'Bound Device'})</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 text-[11px]">No Device Linked</span>
+                        )}
+                      </td>
+                      <td className="py-4 px-4">
+                        <StatusBadge status={emp.is_active} />
+                      </td>
+                      <td className="py-4 px-4 sm:px-6 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {boundDevice && (
+                            <button
+                              onClick={() => handleOpenUnbind(emp)}
+                              className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
+                              title="Unbind Device"
+                            >
+                              <SmartphoneNfc className="h-4 w-4" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleOpenToggleStatus(emp)}
+                            className={`rounded-lg p-1.5 transition-colors cursor-pointer ${
+                              emp.is_active
+                                ? 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'
+                                : 'text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700'
+                            }`}
+                            title={emp.is_active ? 'Deactivate Account' : 'Activate Account'}
+                          >
+                            <Power className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM ACTION DIALOG */}
+      <ConfirmDialog
+        isOpen={isConfirmOpen}
+        onClose={() => setIsConfirmOpen(false)}
+        onConfirm={handleConfirmAction}
+        isLoading={isProcessing}
+        title={actionType === 'unbind' ? 'Unbind Employee Device' : selectedEmp?.is_active ? 'Deactivate Employee' : 'Activate Employee'}
+        message={
+          actionType === 'unbind'
+            ? `Are you sure you want to unbind the active device for ${selectedEmp?.full_name}? The employee will be able to bind a new device on their next login.`
+            : `Are you sure you want to ${selectedEmp?.is_active ? 'deactivate' : 'activate'} the account for ${selectedEmp?.full_name}?`
+        }
+        confirmText={actionType === 'unbind' ? 'Unbind Device' : selectedEmp?.is_active ? 'Deactivate' : 'Activate'}
+        isDestructive={actionType === 'unbind' || Boolean(selectedEmp?.is_active)}
+      />
+    </div>
+  )
+}

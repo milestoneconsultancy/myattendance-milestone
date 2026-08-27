@@ -113,7 +113,15 @@ export type Database = {
           created_at?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'geofences_project_id_fkey'
+            columns: ['project_id']
+            isOneToOne: false
+            referencedRelation: 'projects'
+            referencedColumns: ['id']
+          }
+        ]
       }
       employee_project_assignments: {
         Row: {
@@ -137,7 +145,22 @@ export type Database = {
           assigned_at?: string
           assigned_by?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'employee_project_assignments_employee_id_fkey'
+            columns: ['employee_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'employee_project_assignments_project_id_fkey'
+            columns: ['project_id']
+            isOneToOne: false
+            referencedRelation: 'projects'
+            referencedColumns: ['id']
+          }
+        ]
       }
       devices: {
         Row: {
@@ -173,7 +196,15 @@ export type Database = {
           unbound_at?: string | null
           unbound_by?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'devices_employee_id_fkey'
+            columns: ['employee_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          }
+        ]
       }
       attendance_events: {
         Row: {
@@ -212,7 +243,22 @@ export type Database = {
           device_id?: string | null
           created_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'attendance_events_employee_id_fkey'
+            columns: ['employee_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'attendance_events_project_id_fkey'
+            columns: ['project_id']
+            isOneToOne: false
+            referencedRelation: 'projects'
+            referencedColumns: ['id']
+          }
+        ]
       }
       daily_attendance: {
         Row: {
@@ -257,7 +303,22 @@ export type Database = {
           created_at?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'daily_attendance_employee_id_fkey'
+            columns: ['employee_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'daily_attendance_project_id_fkey'
+            columns: ['project_id']
+            isOneToOne: false
+            referencedRelation: 'projects'
+            referencedColumns: ['id']
+          }
+        ]
       }
       attendance_adjustments: {
         Row: {
@@ -287,7 +348,22 @@ export type Database = {
           remark?: string
           created_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'attendance_adjustments_daily_attendance_id_fkey'
+            columns: ['daily_attendance_id']
+            isOneToOne: false
+            referencedRelation: 'daily_attendance'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'attendance_adjustments_adjusted_by_fkey'
+            columns: ['adjusted_by']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          }
+        ]
       }
       audit_logs: {
         Row: {
@@ -320,7 +396,15 @@ export type Database = {
           ip_address?: string | null
           created_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'audit_logs_actor_id_fkey'
+            columns: ['actor_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          }
+        ]
       }
     }
     Views: {
@@ -350,4 +434,3 @@ export type AttendanceEvent = Database['public']['Tables']['attendance_events'][
 export type DailyAttendance = Database['public']['Tables']['daily_attendance']['Row']
 export type AttendanceAdjustment = Database['public']['Tables']['attendance_adjustments']['Row']
 export type AuditLog = Database['public']['Tables']['audit_logs']['Row']
-

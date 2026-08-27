@@ -2,11 +2,20 @@ import React from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { AppLayout } from '../components/layout/AppLayout'
+import { AdminLayout } from '../components/admin/AdminLayout'
 import { ProtectedRoute } from './ProtectedRoute'
 import { LoginPage } from '../pages/auth/LoginPage'
 import { ForcePasswordChangePage } from '../pages/auth/ForcePasswordChangePage'
 import { EmployeeDashboardPage } from '../pages/employee/EmployeeDashboardPage'
 import { AdminDashboardPage } from '../pages/admin/AdminDashboardPage'
+import { AdminProjectsPage } from '../pages/admin/AdminProjectsPage'
+import { AdminGeofencesPage } from '../pages/admin/AdminGeofencesPage'
+import { AdminEmployeesPage } from '../pages/admin/AdminEmployeesPage'
+import { AdminAssignmentsPage } from '../pages/admin/AdminAssignmentsPage'
+import { AdminAttendancePage } from '../pages/admin/AdminAttendancePage'
+import { AdminReportsPage } from '../pages/admin/AdminReportsPage'
+import { AdminAuditLogsPage } from '../pages/admin/AdminAuditLogsPage'
+import { AdminSettingsPage } from '../pages/admin/AdminSettingsPage'
 import { UnauthorizedPage } from '../pages/error/UnauthorizedPage'
 import { NotFoundPage } from '../pages/error/NotFoundPage'
 import { LoadingSpinner } from '../components/common/LoadingSpinner'
@@ -45,7 +54,27 @@ export const AppRoutes: React.FC = () => {
       {/* Public / Auth routes */}
       <Route path="/login" element={<LoginPage />} />
 
-      {/* Main app layout wrapper */}
+      {/* Admin Console routes with dedicated AdminLayout & ProtectedRoute */}
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute allowedRoles={['admin']}>
+            <AdminLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<AdminDashboardPage />} />
+        <Route path="projects" element={<AdminProjectsPage />} />
+        <Route path="geofences" element={<AdminGeofencesPage />} />
+        <Route path="employees" element={<AdminEmployeesPage />} />
+        <Route path="assignments" element={<AdminAssignmentsPage />} />
+        <Route path="attendance" element={<AdminAttendancePage />} />
+        <Route path="reports" element={<AdminReportsPage />} />
+        <Route path="audit" element={<AdminAuditLogsPage />} />
+        <Route path="settings" element={<AdminSettingsPage />} />
+      </Route>
+
+      {/* Main app layout wrapper for Employee & General views */}
       <Route element={<AppLayout />}>
         {/* Smart Index redirect */}
         <Route path="/" element={<HomeRedirect />} />
@@ -66,16 +95,6 @@ export const AppRoutes: React.FC = () => {
           element={
             <ProtectedRoute allowedRoles={['employee']}>
               <EmployeeDashboardPage />
-            </ProtectedRoute>
-          }
-        />
-
-        {/* Admin Dashboard - strictly for administrators */}
-        <Route
-          path="/admin"
-          element={
-            <ProtectedRoute allowedRoles={['admin']}>
-              <AdminDashboardPage />
             </ProtectedRoute>
           }
         />
