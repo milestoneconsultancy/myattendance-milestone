@@ -19,7 +19,13 @@ export const LoginPage: React.FC = () => {
     if (from) {
       return <Navigate to={from} replace />
     }
-    return <Navigate to={role === 'admin' ? '/admin' : '/dashboard'} replace />
+    if (role === 'admin') {
+      return <Navigate to="/admin" replace />
+    }
+    if (role === 'employee') {
+      return <Navigate to="/dashboard" replace />
+    }
+    return <Navigate to="/" replace />
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -40,7 +46,7 @@ export const LoginPage: React.FC = () => {
       return
     }
 
-    // Auth provider updates state and triggers redirect
+    // Role is loaded synchronously in signIn(). Redirect to '/' will hit HomeRedirect with loaded role
     navigate('/')
   }
 
@@ -141,4 +147,3 @@ export const LoginPage: React.FC = () => {
     </div>
   )
 }
-

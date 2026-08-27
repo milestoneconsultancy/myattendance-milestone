@@ -11,12 +11,12 @@ import { UnauthorizedPage } from '../pages/error/UnauthorizedPage'
 import { NotFoundPage } from '../pages/error/NotFoundPage'
 import { LoadingSpinner } from '../components/common/LoadingSpinner'
 
-// Smart index redirect based on user role
+// Smart index redirect based strictly on authoritative database role
 const HomeRedirect: React.FC = () => {
   const { isAuthenticated, isLoading, role } = useAuth()
 
   if (isLoading) {
-    return <LoadingSpinner fullScreen message="Loading portal..." />
+    return <LoadingSpinner fullScreen message="Checking permissions..." />
   }
 
   if (!isAuthenticated) {
@@ -27,6 +27,11 @@ const HomeRedirect: React.FC = () => {
     return <Navigate to="/admin" replace />
   }
 
+  if (role === 'employee') {
+    return <Navigate to="/dashboard" replace />
+  }
+
+  // If authenticated but role could not be resolved, stay on layout to show error
   return <Navigate to="/dashboard" replace />
 }
 
@@ -51,17 +56,17 @@ export const AppRoutes: React.FC = () => {
           }
         />
 
-        {/* Employee Dashboard */}
+        {/* Employee Dashboard - strictly for employees */}
         <Route
           path="/dashboard"
           element={
-            <ProtectedRoute allowedRoles={['employee', 'admin']}>
+            <ProtectedRoute allowedRoles={['employee']}>
               <EmployeeDashboardPage />
             </ProtectedRoute>
           }
         />
 
-        {/* Admin Dashboard */}
+        {/* Admin Dashboard - strictly for administrators */}
         <Route
           path="/admin"
           element={
@@ -78,4 +83,3 @@ export const AppRoutes: React.FC = () => {
     </Routes>
   )
 }
-

@@ -9,6 +9,7 @@ export interface AuthState {
   isLoading: boolean
   isAuthenticated: boolean
   mustChangePassword: boolean
+  profileError: string | null
 }
 
 export interface AuthContextValue extends AuthState {
@@ -16,4 +17,3 @@ export interface AuthContextValue extends AuthState {
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
 }
-

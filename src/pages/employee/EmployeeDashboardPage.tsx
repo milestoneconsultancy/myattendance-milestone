@@ -15,7 +15,7 @@ export const EmployeeDashboardPage: React.FC = () => {
               <Clock className="h-3 w-3" /> Production Foundation Ready
             </span>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-              Welcome, {profile?.full_name || user?.email || 'Employee'}
+              Welcome, {profile?.full_name || user?.email}
             </h1>
             <p className="text-sm text-slate-300">
               Milestone Consultancy • Attendance Portal
@@ -23,7 +23,7 @@ export const EmployeeDashboardPage: React.FC = () => {
           </div>
           <div className="flex items-center gap-2 text-xs font-medium text-sky-300 bg-white/10 backdrop-blur-xs px-3.5 py-2 rounded-xl border border-white/10 w-fit">
             <User className="h-4 w-4" />
-            Role: <span className="font-semibold text-white uppercase">{profile?.role || 'Employee'}</span>
+            Role: <span className="font-semibold text-white uppercase">{profile?.role}</span>
           </div>
         </div>
       </div>
@@ -69,4 +69,3 @@ export const EmployeeDashboardPage: React.FC = () => {
     </div>
   )
 }
-

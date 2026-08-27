@@ -48,14 +48,20 @@ export const Navbar: React.FC = () => {
                 <span className="text-sm font-semibold text-slate-800">
                   {profile?.full_name || user?.email}
                 </span>
-                <span className="inline-flex items-center justify-end gap-1 text-xs font-medium text-slate-500">
-                  {role === 'admin' ? (
+                <span className="inline-flex items-center justify-end gap-1 text-xs font-medium">
+                  {role === 'admin' && (
                     <span className="inline-flex items-center gap-1 text-emerald-600 font-semibold">
-                      <Shield className="h-3 w-3" /> Admin
+                      <Shield className="h-3 w-3" /> ADMIN
                     </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-slate-600">
-                      <UserIcon className="h-3 w-3" /> Employee
+                  )}
+                  {role === 'employee' && (
+                    <span className="inline-flex items-center gap-1 text-slate-600 font-semibold">
+                      <UserIcon className="h-3 w-3" /> EMPLOYEE
+                    </span>
+                  )}
+                  {!role && (
+                    <span className="text-amber-600 font-medium text-[11px]">
+                      Verifying...
                     </span>
                   )}
                 </span>
@@ -64,7 +70,7 @@ export const Navbar: React.FC = () => {
               <button
                 onClick={handleLogout}
                 title="Sign out"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-rose-600 transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-rose-600 transition-colors cursor-pointer"
               >
                 <LogOut className="h-4 w-4" />
                 <span className="hidden sm:inline">Logout</span>
@@ -76,4 +82,3 @@ export const Navbar: React.FC = () => {
     </header>
   )
 }
-
