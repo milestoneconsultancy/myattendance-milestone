@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuth } from '../../hooks/useAuth'
-import { calculateHaversineDistance, isWithinGeofence } from '../../lib/geoUtils'
+import { isWithinGeofence } from '../../lib/geoUtils'
 import {
   validateEmployeeDevice,
   bindCurrentDevice,
@@ -78,7 +78,6 @@ export const EmployeeDashboardPage: React.FC = () => {
         .select('*')
         .eq('employee_id', user.id)
         .eq('is_active', true)
-        .order('created_at', { ascending: false })
 
       if (assignErr) {
         console.error('[EmployeeDashboard] Failed to fetch employee_project_assignments:', assignErr)
@@ -88,8 +87,15 @@ export const EmployeeDashboardPage: React.FC = () => {
       let resolvedProject: Project | null = null
 
       if (assignmentsData && assignmentsData.length > 0) {
+        // Safe sort by creation or assignment date in memory
+        const sortedAssignments = [...assignmentsData].sort((a, b) => {
+          const dateA = a.created_at || a.assigned_from || ''
+          const dateB = b.created_at || b.assigned_from || ''
+          return dateB.localeCompare(dateA)
+        })
+
         // Fetch project master data for all assigned project IDs
-        const projectIds = Array.from(new Set(assignmentsData.map((a) => a.project_id)))
+        const projectIds = Array.from(new Set(sortedAssignments.map((a) => a.project_id)))
         const { data: projectsData, error: projErr } = await supabase
           .from('projects')
           .select('*')
@@ -103,7 +109,7 @@ export const EmployeeDashboardPage: React.FC = () => {
 
         if (projectsData && projectsData.length > 0) {
           // Find assignment valid for today
-          for (const assign of assignmentsData) {
+          for (const assign of sortedAssignments) {
             const proj = projectsData.find((p) => p.id === assign.project_id)
             if (!proj) continue
 
@@ -208,15 +214,38 @@ export const EmployeeDashboardPage: React.FC = () => {
     }
   }
 
-  // Watch GPS Geolocation
+  // Watch GPS Geolocation with immediate acquisition and continuous watch
   useEffect(() => {
     if (!navigator.geolocation) {
       setGeoError('GPS Geolocation is not supported by your browser.')
+      setIsLocating(false)
       return
     }
 
     setIsLocating(true)
 
+    // 1. Trigger fast initial fix immediately
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setCurrentPosition({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: Math.round(pos.coords.accuracy)
+        })
+        setIsLocating(false)
+        setGeoError(null)
+      },
+      (err) => {
+        console.warn('[Geolocation] Initial GPS fix notice:', err.message)
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    )
+
+    // 2. Maintain continuous live GPS watch
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         setCurrentPosition({
@@ -237,7 +266,7 @@ export const EmployeeDashboardPage: React.FC = () => {
             setGeoError('GPS position unavailable. Please ensure your device location is turned on.')
             break
           case err.TIMEOUT:
-            setGeoError('GPS acquisition timed out. Retrying high-accuracy fix...')
+            setGeoError('GPS acquisition timed out. Waiting for stronger signal...')
             break
           default:
             setGeoError('Unable to retrieve GPS coordinates.')
@@ -246,7 +275,7 @@ export const EmployeeDashboardPage: React.FC = () => {
       {
         enableHighAccuracy: true,
         timeout: 15000,
-        maximumAge: 10000
+        maximumAge: 5000
       }
     )
 
@@ -262,21 +291,21 @@ export const EmployeeDashboardPage: React.FC = () => {
 
   if (currentPosition && activeGeofences.length > 0) {
     for (const geo of activeGeofences) {
-      const dist = Math.round(
-        calculateHaversineDistance(
-          currentPosition.latitude,
-          currentPosition.longitude,
-          geo.latitude,
-          geo.longitude
-        )
+      const radiusMeters = Number(geo.radius_meters || 150)
+      const { isInside, distanceMeters } = isWithinGeofence(
+        currentPosition.latitude,
+        currentPosition.longitude,
+        geo.latitude,
+        geo.longitude,
+        radiusMeters
       )
 
-      if (dist < minDistance) {
-        minDistance = dist
-        closestGeofence = { geofence: geo, distanceMeters: dist }
+      if (distanceMeters < minDistance) {
+        minDistance = distanceMeters
+        closestGeofence = { geofence: geo, distanceMeters }
       }
 
-      if (isWithinGeofence(currentPosition.latitude, currentPosition.longitude, geo.latitude, geo.longitude, geo.radius_meters)) {
+      if (isInside) {
         isInsideAnyGeofence = true
       }
     }
@@ -616,15 +645,37 @@ export const EmployeeDashboardPage: React.FC = () => {
           <div className="flex items-start justify-between">
             <div className="space-y-1">
               <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Geofence Proximity</p>
-              {isLocating ? (
+              {!currentPosition && isLocating ? (
                 <div className="flex items-center gap-1.5 text-amber-600 text-sm font-semibold">
                   <RefreshCw className="h-4 w-4 animate-spin" />
-                  <span>Acquiring GPS Fix...</span>
+                  <span>Acquiring GPS Signal...</span>
+                </div>
+              ) : !currentPosition ? (
+                <div>
+                  <p className="text-sm font-bold text-rose-600">GPS Inactive</p>
+                  <p className="text-xs text-slate-500">{geoError || 'Location signal unavailable'}</p>
+                </div>
+              ) : activeGeofences.length === 0 ? (
+                <div>
+                  <p className="text-sm font-bold text-amber-600">No Sites Assigned</p>
+                  <p className="text-xs text-slate-500">GPS Active (±{currentPosition.accuracy}m)</p>
+                </div>
+              ) : currentPosition.accuracy > 80 ? (
+                <div>
+                  <p className="text-sm font-bold text-amber-600">Low GPS Precision</p>
+                  <p className="text-xs text-slate-500">
+                    Accuracy ±{currentPosition.accuracy}m (Needs ±80m or better)
+                  </p>
                 </div>
               ) : isInsideAnyGeofence ? (
-                <div className="flex items-center gap-1.5 text-emerald-600 text-sm font-bold">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Inside Site Perimeter</span>
+                <div>
+                  <p className="text-sm font-bold text-emerald-600 flex items-center gap-1">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    <span>Inside Site Perimeter</span>
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Verified at {closestGeofence?.geofence.name || assignedProject?.name}
+                  </p>
                 </div>
               ) : closestGeofence ? (
                 <div>
@@ -637,14 +688,30 @@ export const EmployeeDashboardPage: React.FC = () => {
                 <p className="text-sm font-medium text-slate-400">GPS Inactive</p>
               )}
             </div>
-            <div className={`rounded-xl p-2.5 ${isInsideAnyGeofence ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+            <div className={`rounded-xl p-2.5 ${isInsideAnyGeofence && (currentPosition?.accuracy || 999) <= 80 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
               <Navigation className="h-5 w-5" />
             </div>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-100 text-[11px] font-mono text-slate-500 flex justify-between">
+          <div className="mt-4 pt-3 border-t border-slate-100 text-[11px] font-mono text-slate-500 flex justify-between items-center">
             <span>Accuracy: {currentPosition ? `±${currentPosition.accuracy}m` : '—'}</span>
-            <span>{isInsideAnyGeofence ? '✅ Verified' : '❌ Out of range'}</span>
+            <span className={`font-semibold ${
+              !currentPosition
+                ? 'text-slate-400'
+                : currentPosition.accuracy > 80
+                ? 'text-amber-600'
+                : isInsideAnyGeofence
+                ? 'text-emerald-600'
+                : 'text-rose-600'
+            }`}>
+              {!currentPosition
+                ? '❌ No Signal'
+                : currentPosition.accuracy > 80
+                ? '⚠️ Low Precision'
+                : isInsideAnyGeofence
+                ? '✅ Inside Range'
+                : '❌ Out of range'}
+            </span>
           </div>
         </div>
 
@@ -713,13 +780,14 @@ export const EmployeeDashboardPage: React.FC = () => {
                 isClockingIn ||
                 Boolean(todayAttendance?.sign_in_at) ||
                 !isInsideAnyGeofence ||
-                isLocating ||
+                !currentPosition ||
+                currentPosition.accuracy > 80 ||
                 deviceValidation?.status !== 'MATCH'
               }
               className={`flex flex-col items-center justify-center gap-2 rounded-2xl p-6 transition-all border shadow-sm ${
                 todayAttendance?.sign_in_at
                   ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed'
-                  : isInsideAnyGeofence && deviceValidation?.status === 'MATCH'
+                  : isInsideAnyGeofence && currentPosition && currentPosition.accuracy <= 80 && deviceValidation?.status === 'MATCH'
                   ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 cursor-pointer shadow-md'
                   : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
               }`}
@@ -736,8 +804,12 @@ export const EmployeeDashboardPage: React.FC = () => {
                     ? 'Requires Device Registration'
                     : deviceValidation?.status === 'MISMATCH'
                     ? 'Locked to another device'
+                    : !currentPosition
+                    ? isLocating ? 'Acquiring GPS Signal...' : 'Location signal unavailable'
+                    : currentPosition.accuracy > 80
+                    ? `GPS accuracy too low (±${currentPosition.accuracy}m)`
                     : isInsideAnyGeofence
-                    ? 'GPS & Device Verified'
+                    ? 'GPS & Device Verified — Ready'
                     : 'Requires GPS inside site perimeter'}
                 </span>
               </div>
@@ -751,13 +823,14 @@ export const EmployeeDashboardPage: React.FC = () => {
                 !todayAttendance?.sign_in_at ||
                 Boolean(todayAttendance?.sign_out_at) ||
                 !isInsideAnyGeofence ||
-                isLocating ||
+                !currentPosition ||
+                currentPosition.accuracy > 80 ||
                 deviceValidation?.status !== 'MATCH'
               }
               className={`flex flex-col items-center justify-center gap-2 rounded-2xl p-6 transition-all border shadow-sm ${
                 todayAttendance?.sign_out_at
                   ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed'
-                  : todayAttendance?.sign_in_at && isInsideAnyGeofence && deviceValidation?.status === 'MATCH'
+                  : todayAttendance?.sign_in_at && isInsideAnyGeofence && currentPosition && currentPosition.accuracy <= 80 && deviceValidation?.status === 'MATCH'
                   ? 'bg-sky-600 hover:bg-sky-700 text-white border-sky-700 cursor-pointer shadow-md'
                   : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
               }`}
@@ -778,8 +851,12 @@ export const EmployeeDashboardPage: React.FC = () => {
                     ? 'Must Clock In first'
                     : deviceValidation?.status === 'MISMATCH'
                     ? 'Locked to another device'
+                    : !currentPosition
+                    ? isLocating ? 'Acquiring GPS Signal...' : 'Location signal unavailable'
+                    : currentPosition.accuracy > 80
+                    ? `GPS accuracy too low (±${currentPosition.accuracy}m)`
                     : isInsideAnyGeofence
-                    ? 'GPS & Device Verified'
+                    ? 'GPS & Device Verified — Ready'
                     : 'Requires GPS inside site perimeter'}
                 </span>
               </div>

@@ -187,10 +187,9 @@ export default async function handler(req, res) {
     // 7. Verify Active Project Assignment for Today
     const { data: projectAssignments, error: projAssignErr } = await adminClient
       .from('employee_project_assignments')
-      .select('id, project_id, assigned_from, assigned_to, is_active')
+      .select('*')
       .eq('employee_id', callerUser.id)
       .eq('is_active', true)
-      .order('created_at', { ascending: false })
 
     if (projAssignErr) {
       console.error('[API attendance] Project assignment lookup error:', projAssignErr)
@@ -201,11 +200,18 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Attendance blocked: You have no active project assigned.' })
     }
 
+    // Safe memory sort by creation or assignment date
+    const sortedAssignments = [...projectAssignments].sort((a, b) => {
+      const dateA = a.created_at || a.assigned_from || a.assigned_at || ''
+      const dateB = b.created_at || b.assigned_from || b.assigned_at || ''
+      return String(dateB).localeCompare(String(dateA))
+    })
+
     // Find assignment valid for today
     let activeAssignment = null
-    for (const assign of projectAssignments) {
-      const fromOk = !assign.assigned_from || assign.assigned_from <= todayDateStr
-      const toOk = !assign.assigned_to || assign.assigned_to >= todayDateStr
+    for (const assign of sortedAssignments) {
+      const fromOk = !assign.assigned_from || String(assign.assigned_from).slice(0, 10) <= todayDateStr
+      const toOk = !assign.assigned_to || String(assign.assigned_to).slice(0, 10) >= todayDateStr
       if (fromOk && toOk) {
         activeAssignment = assign
         break
@@ -214,7 +220,7 @@ export default async function handler(req, res) {
 
     // Fallback to first active assignment if dates are open
     if (!activeAssignment) {
-      activeAssignment = projectAssignments[0]
+      activeAssignment = sortedAssignments[0]
     }
 
     // Fetch Project record
@@ -272,13 +278,14 @@ export default async function handler(req, res) {
     let closestDistance = Infinity
 
     for (const geo of authorizedGeofences) {
+      const radiusMeters = Number(geo.radius_meters || geo.radius || 150)
       const dist = calculateHaversineDistance(latitude, longitude, geo.latitude, geo.longitude)
       if (dist < closestDistance) {
         closestDistance = dist
-        closestGeofence = geo
+        closestGeofence = { ...geo, radius_meters: radiusMeters }
       }
-      if (dist <= geo.radius_meters) {
-        matchedGeofence = geo
+      if (dist <= radiusMeters) {
+        matchedGeofence = { ...geo, radius_meters: radiusMeters }
         matchedDistance = dist
         break
       }
@@ -482,3 +489,4 @@ export default async function handler(req, res) {
     })
   }
 }
+
