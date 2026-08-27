@@ -26,12 +26,22 @@ export interface CreateEmployeeResult {
 export async function createEmployeeAccount(input: CreateEmployeeInput): Promise<CreateEmployeeResult> {
   const { full_name, email, employee_code, phone, password } = input
 
-  // Verify current admin session
-  const { data: { session } } = await supabase.auth.getSession()
-  if (!session?.access_token) {
+  // 1. Obtain current valid session and access token
+  let token: string | null = null
+  const { data: sessionData } = await supabase.auth.getSession()
+  
+  if (sessionData?.session?.access_token) {
+    token = sessionData.session.access_token
+  } else {
+    // Attempt token refresh if session is missing in memory
+    const { data: refreshData } = await supabase.auth.refreshSession()
+    token = refreshData?.session?.access_token || null
+  }
+
+  if (!token) {
     return {
       success: false,
-      error: 'Authentication required. Please sign in as an administrator.'
+      error: 'Authentication required. Please sign in as an administrator to create employee accounts.'
     }
   }
 
@@ -40,7 +50,7 @@ export async function createEmployeeAccount(input: CreateEmployeeInput): Promise
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
         full_name: full_name.trim(),
@@ -108,4 +118,3 @@ export async function createEmployeeAccount(input: CreateEmployeeInput): Promise
     }
   }
 }
-

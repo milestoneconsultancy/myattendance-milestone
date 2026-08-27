@@ -36,13 +36,14 @@ function generateSecureTempPassword() {
  * Uses SUPABASE_SERVICE_ROLE_KEY exclusively on the server side.
  * 
  * Flow:
- * 1. Verifies caller JWT token from Authorization header.
- * 2. Verifies caller's profile role is 'admin'.
- * 3. Checks for duplicate email or employee_code in public.profiles.
- * 4. Calls auth.admin.createUser with email_confirm: true and a unique temporary password.
- * 5. Inserts public.profiles using the EXACT same UUID (profiles.id = auth.users.id).
- * 6. Partial-failure handling: If profiles insert fails, deletes the auth user (rollback).
- * 7. Records immutable audit log.
+ * 1. Verifies caller JWT token from Authorization header using Supabase Auth.
+ * 2. Queries public.profiles using the privileged service_role client (bypasses RLS).
+ * 3. Authorizes caller (checks role === 'admin' and is_active !== false).
+ * 4. Checks for duplicate email or employee_code in public.profiles.
+ * 5. Calls auth.admin.createUser with email_confirm: true and a unique temporary password.
+ * 6. Inserts public.profiles using the EXACT same UUID (profiles.id = auth.users.id).
+ * 7. Partial-failure handling: If profiles insert fails, deletes the auth user (rollback).
+ * 8. Records immutable audit log to public.audit_logs.
  */
 export default async function handler(req, res) {
   // CORS & Preflight handling
@@ -62,52 +63,117 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed. Only POST is supported.' })
   }
 
+  // 1. Extract Bearer token
   const authHeader = req.headers.authorization || req.headers.Authorization
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: Missing or invalid Bearer token in Authorization header.' })
   }
 
-  const token = authHeader.replace('Bearer ', '').trim()
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+  if (!token) {
+    return res.status(401).json({ error: 'Unauthorized: Empty access token provided.' })
+  }
 
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY
+  // 2. Read server-side environment variables
+  const supabaseUrl = (
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    ''
+  ).trim()
+
+  const serviceRoleKey = (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    ''
+  ).trim()
 
   if (!supabaseUrl || !serviceRoleKey) {
-    console.error('[API create-employee] Server configuration error: SUPABASE_SERVICE_ROLE_KEY or SUPABASE_URL missing.')
+    console.error('[API create-employee] Server configuration error: SUPABASE_SERVICE_ROLE_KEY or SUPABASE_URL missing in environment.')
     return res.status(500).json({
-      error: 'Server configuration error: Missing Supabase credentials in server environment. Please set SUPABASE_SERVICE_ROLE_KEY in environment variables.'
+      error: 'Server configuration error: SUPABASE_SERVICE_ROLE_KEY is not configured in the server environment.'
     })
   }
 
   try {
-    // 1. Verify caller identity using JWT token
-    const authClient = createClient(supabaseUrl, anonKey || serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false }
+    // 3. Initialize privileged admin client with service_role key (bypasses RLS)
+    const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false
+      }
     })
-    const { data: { user: callerUser }, error: tokenErr } = await authClient.auth.getUser(token)
+
+    // 4. Verify caller JWT token directly via admin client
+    const { data: userData, error: tokenErr } = await adminClient.auth.getUser(token)
+    const callerUser = userData?.user
 
     if (tokenErr || !callerUser) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid or expired authentication token.' })
+      console.error('[API create-employee] Token verification failed:', tokenErr?.message)
+      return res.status(401).json({
+        error: `Unauthorized: Invalid or expired session token. (${tokenErr?.message || 'No user found'})`
+      })
     }
 
-    // 2. Initialize privileged admin client with service_role key
-    const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false }
-    })
+    // 5. Look up caller's profile in public.profiles (Primary: ID, Secondary: Email)
+    let callerProfile = null
+    let profileErr = null
 
-    // Verify caller role is 'admin' from public.profiles
-    const { data: callerProfile, error: profileCheckErr } = await adminClient
+    const { data: profileById, error: errById } = await adminClient
       .from('profiles')
-      .select('role')
+      .select('id, role, is_active, email, full_name')
       .eq('id', callerUser.id)
       .maybeSingle()
 
-    if (profileCheckErr || callerProfile?.role !== 'admin') {
-      return res.status(403).json({ error: 'Forbidden: Only administrators can create employee accounts.' })
+    if (profileById) {
+      callerProfile = profileById
+    } else if (callerUser.email) {
+      const { data: profileByEmail, error: errByEmail } = await adminClient
+        .from('profiles')
+        .select('id, role, is_active, email, full_name')
+        .ilike('email', callerUser.email.trim())
+        .maybeSingle()
+
+      if (profileByEmail) {
+        callerProfile = profileByEmail
+      } else {
+        profileErr = errByEmail || errById
+      }
+    } else {
+      profileErr = errById
     }
 
-    // 3. Extract & Validate input
+    // 6. Verify administrator authorization
+    const role = String(
+      callerProfile?.role ||
+      callerUser.app_metadata?.role ||
+      callerUser.user_metadata?.role ||
+      ''
+    ).toLowerCase().trim()
+
+    const isActive = callerProfile ? callerProfile.is_active !== false : true
+    const isAdmin = (role === 'admin' || role === 'administrator' || role === 'superadmin') && isActive
+
+    if (!isAdmin) {
+      console.error('[API create-employee] Non-admin access rejected:', {
+        userId: callerUser.id,
+        userEmail: callerUser.email,
+        profileFound: Boolean(callerProfile),
+        profileRole: callerProfile?.role,
+        isActive: callerProfile?.is_active,
+        appMetadataRole: callerUser.app_metadata?.role,
+        userMetadataRole: callerUser.user_metadata?.role,
+        profileErr: profileErr?.message
+      })
+
+      return res.status(403).json({
+        error: `Forbidden: Only administrators can create employee accounts. (User: ${callerUser.email || callerUser.id}, Detected Role: ${role || 'none'})`
+      })
+    }
+
+    // 7. Extract & Validate input
     const { full_name, email, employee_code, phone, password } = req.body || {}
 
     if (!full_name || typeof full_name !== 'string' || !full_name.trim()) {
@@ -126,11 +192,11 @@ export default async function handler(req, res) {
       ? String(password).trim() 
       : generateSecureTempPassword()
 
-    // Duplicate check in profiles
+    // 8. Duplicate check in profiles
     const { data: existingEmail } = await adminClient
       .from('profiles')
       .select('id, email')
-      .eq('email', cleanEmail)
+      .ilike('email', cleanEmail)
       .maybeSingle()
 
     if (existingEmail) {
@@ -149,7 +215,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4. Create Auth User in auth.users via admin API
+    // 9. Create Auth User in auth.users via admin API
     let createdAuthUserId = null
     const { data: authData, error: createAuthErr } = await adminClient.auth.admin.createUser({
       email: cleanEmail,
@@ -171,7 +237,7 @@ export default async function handler(req, res) {
 
     createdAuthUserId = authData.user.id
 
-    // 5. Insert public.profiles with the EXACT SAME auth user UUID
+    // 10. Insert public.profiles with the EXACT SAME auth user UUID
     const { data: newProfile, error: profileInsertErr } = await adminClient
       .from('profiles')
       .insert({
@@ -200,7 +266,7 @@ export default async function handler(req, res) {
       })
     }
 
-    // 6. Log audit event
+    // 11. Log audit event
     await adminClient.from('audit_logs').insert({
       actor_id: callerUser.id,
       action: 'EMPLOYEE_CREATE',
