@@ -93,7 +93,7 @@ export const AdminDashboardPage: React.FC = () => {
       const { data: attendanceData, error: attErr } = await supabase
         .from('daily_attendance')
         .select('*')
-        .eq('date', todayDate)
+        .eq('attendance_date', todayDate)
 
       if (attErr) throw attErr
       const allAttendance = attendanceData || []

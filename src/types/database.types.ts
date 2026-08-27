@@ -265,7 +265,7 @@ export type Database = {
           id: string
           employee_id: string
           project_id: string | null
-          date: string
+          attendance_date: string
           sign_in_time: string | null
           sign_out_time: string | null
           total_working_hours: number | null
@@ -279,7 +279,7 @@ export type Database = {
           id?: string
           employee_id: string
           project_id?: string | null
-          date: string
+          attendance_date?: string
           sign_in_time?: string | null
           sign_out_time?: string | null
           total_working_hours?: number | null
@@ -293,7 +293,7 @@ export type Database = {
           id?: string
           employee_id?: string
           project_id?: string | null
-          date?: string
+          attendance_date?: string
           sign_in_time?: string | null
           sign_out_time?: string | null
           total_working_hours?: number | null

@@ -65,7 +65,7 @@ export const AdminAttendancePage: React.FC = () => {
       let query = supabase
         .from('daily_attendance')
         .select('*, employee:profiles(*), project:projects(*)')
-        .eq('date', selectedDate)
+        .eq('attendance_date', selectedDate)
         .order('created_at', { ascending: false })
 
       if (selectedProjectId !== 'all') {
@@ -190,7 +190,7 @@ export const AdminAttendancePage: React.FC = () => {
         targetId: adjustingRecord.id,
         details: {
           employee_name: adjustingRecord.employee?.full_name,
-          date: adjustingRecord.date,
+          date: adjustingRecord.attendance_date,
           previous: previousValue,
           new: newValue,
           remark: adjustFormData.remark.trim()
@@ -455,7 +455,7 @@ export const AdminAttendancePage: React.FC = () => {
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500 font-medium">Date:</span>
-              <span className="font-mono">{adjustingRecord?.date}</span>
+              <span className="font-mono">{adjustingRecord?.attendance_date}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500 font-medium">Original Status:</span>

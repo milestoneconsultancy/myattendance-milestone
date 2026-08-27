@@ -44,9 +44,9 @@ export const AdminReportsPage: React.FC = () => {
       let query = supabase
         .from('daily_attendance')
         .select('*, employee:profiles(*), project:projects(*)')
-        .gte('date', startDate)
-        .lte('date', endDate)
-        .order('date', { ascending: false })
+        .gte('attendance_date', startDate)
+        .lte('attendance_date', endDate)
+        .order('attendance_date', { ascending: false })
 
       if (selectedProjectId !== 'all') {
         query = query.eq('project_id', selectedProjectId)
@@ -124,7 +124,7 @@ export const AdminReportsPage: React.FC = () => {
       `"${r.employee?.email || ''}"`,
       `"${r.employee?.employee_code || ''}"`,
       `"${r.project?.name || ''}"`,
-      `"${r.date}"`,
+      `"${r.attendance_date}"`,
       `"${r.status.toUpperCase()}"`,
       `"${r.sign_in_time || ''}"`,
       `"${r.sign_out_time || ''}"`,
@@ -343,7 +343,7 @@ export const AdminReportsPage: React.FC = () => {
                       {record.project?.name || 'Assigned Site'}
                     </td>
                     <td className="py-4 px-4 font-mono text-[11px] text-slate-600">
-                      {record.date}
+                      {record.attendance_date}
                     </td>
                     <td className="py-4 px-4">
                       <StatusBadge status={record.status} activeLabel="PRESENT" inactiveLabel="ABSENT" />
