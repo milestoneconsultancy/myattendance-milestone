@@ -46,8 +46,13 @@ export const EmployeeDashboardPage: React.FC = () => {
   const [isClockingIn, setIsClockingIn] = useState(false)
   const [isClockingOut, setIsClockingOut] = useState(false)
 
-  // Today's date string (YYYY-MM-DD)
-  const todayDateStr = new Date().toISOString().split('T')[0]
+  // Helper: Local date string in YYYY-MM-DD format (avoids UTC offset shifts)
+  const getLocalDateString = useCallback((date: Date = new Date()): string => {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }, [])
 
   // Fetch Employee Assignment, Geofences, and Attendance
   const loadEmployeeData = useCallback(async () => {
@@ -55,31 +60,66 @@ export const EmployeeDashboardPage: React.FC = () => {
     setIsLoading(true)
     setErrorMsg(null)
 
+    const todayStr = getLocalDateString()
+
     try {
-      // 1. Fetch active assignments
+      // 1. Fetch active assignments for the authenticated employee
       const { data: assignmentsData, error: assignErr } = await supabase
         .from('employee_project_assignments')
-        .select('*, project:projects(*)')
+        .select('*')
         .eq('employee_id', user.id)
         .eq('is_active', true)
         .order('created_at', { ascending: false })
 
-      if (assignErr) throw assignErr
+      if (assignErr) {
+        console.error('[EmployeeDashboard] Failed to fetch employee_project_assignments:', assignErr)
+        throw assignErr
+      }
 
-      // Filter assignment valid for today
-      const validAssignment = assignmentsData?.find((a) => {
-        const fromOk = !a.assigned_from || a.assigned_from <= todayDateStr
-        const toOk = !a.assigned_to || a.assigned_to >= todayDateStr
-        const projectActive = (a.project as unknown as Project)?.is_active ?? true
-        return fromOk && toOk && projectActive
-      })
+      let resolvedProject: Project | null = null
 
-      if (validAssignment?.project) {
-        const proj = validAssignment.project as unknown as Project
-        setAssignedProject(proj)
+      if (assignmentsData && assignmentsData.length > 0) {
+        // Fetch project master data for all assigned project IDs
+        const projectIds = Array.from(new Set(assignmentsData.map((a) => a.project_id)))
+        const { data: projectsData, error: projErr } = await supabase
+          .from('projects')
+          .select('*')
+          .in('id', projectIds)
+          .eq('is_active', true)
 
-        // 2. Fetch specific active geofences assigned to this employee
-        let assignedGeos: Geofence[] = []
+        if (projErr) {
+          console.error('[EmployeeDashboard] Failed to fetch projects:', projErr)
+          throw projErr
+        }
+
+        if (projectsData && projectsData.length > 0) {
+          // Find assignment valid for today
+          for (const assign of assignmentsData) {
+            const proj = projectsData.find((p) => p.id === assign.project_id)
+            if (!proj) continue
+
+            const fromOk = !assign.assigned_from || assign.assigned_from <= todayStr
+            const toOk = !assign.assigned_to || assign.assigned_to >= todayStr
+
+            if (fromOk && toOk) {
+              resolvedProject = proj
+              break
+            }
+          }
+
+          // Fallback to the latest active assigned project
+          if (!resolvedProject) {
+            resolvedProject = projectsData[0]
+          }
+        }
+      }
+
+      setAssignedProject(resolvedProject)
+
+      // 2. Fetch specific active geofences assigned to this employee
+      let assignedGeos: Geofence[] = []
+
+      if (resolvedProject) {
         try {
           const { data: empGeoAssigns, error: empGeoAssignErr } = await supabase
             .from('employee_geofence_assignments')
@@ -93,55 +133,54 @@ export const EmployeeDashboardPage: React.FC = () => {
               .from('geofences')
               .select('*')
               .in('id', geoIds)
-              .eq('project_id', proj.id)
+              .eq('project_id', resolvedProject.id)
               .eq('is_active', true)
               .order('name', { ascending: true })
 
-            if (!specGeoErr && specificGeos) {
+            if (!specGeoErr && specificGeos && specificGeos.length > 0) {
               assignedGeos = specificGeos
             }
           }
-        } catch {
-          // Table in deployment transition
+        } catch (geoErr) {
+          console.warn('[EmployeeDashboard] Geofence assignment lookup notice:', geoErr)
         }
 
         // Fallback: If no specific geofences assigned yet, permit all active project sites
         if (assignedGeos.length === 0) {
-          const { data: fallbackGeoData, error: geoErr } = await supabase
+          const { data: fallbackGeoData, error: fallbackGeoErr } = await supabase
             .from('geofences')
             .select('*')
-            .eq('project_id', proj.id)
+            .eq('project_id', resolvedProject.id)
             .eq('is_active', true)
             .order('name', { ascending: true })
 
-          if (!geoErr && fallbackGeoData) {
+          if (!fallbackGeoErr && fallbackGeoData) {
             assignedGeos = fallbackGeoData
           }
         }
-
-        setActiveGeofences(assignedGeos)
-      } else {
-        setAssignedProject(null)
-        setActiveGeofences([])
       }
+
+      setActiveGeofences(assignedGeos)
 
       // 3. Fetch today's daily attendance record
       const { data: attendData, error: attendErr } = await supabase
         .from('daily_attendance')
         .select('*')
         .eq('employee_id', user.id)
-        .eq('attendance_date', todayDateStr)
+        .eq('attendance_date', todayStr)
         .maybeSingle()
 
-      if (attendErr) throw attendErr
-      setTodayAttendance(attendData)
+      if (attendErr) {
+        console.error('[EmployeeDashboard] Failed to fetch daily_attendance:', attendErr)
+      }
+      setTodayAttendance(attendData || null)
     } catch (err) {
       console.error('[EmployeeDashboard] Error loading data:', err)
       setErrorMsg((err as Error).message || 'Failed to load assignment data.')
     } finally {
       setIsLoading(false)
     }
-  }, [user?.id, todayDateStr])
+  }, [user?.id, getLocalDateString])
 
   useEffect(() => {
     loadEmployeeData()
@@ -233,6 +272,7 @@ export const EmployeeDashboardPage: React.FC = () => {
 
     try {
       const nowIso = new Date().toISOString()
+      const todayDateStr = getLocalDateString()
 
       // 1. Record event in attendance_events (using canonical columns)
       const { error: eventErr } = await supabase.from('attendance_events').insert({
