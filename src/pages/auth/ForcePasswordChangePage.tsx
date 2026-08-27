@@ -29,29 +29,61 @@ export const ForcePasswordChangePage: React.FC = () => {
 
     setIsSubmitting(true)
     try {
-      // 1. Update Supabase Auth user password
+      let updateSucceeded = false
+
+      // 1. Attempt client-side Supabase updateUser
       const { error: authError } = await supabase.auth.updateUser({
         password
       })
 
-      if (authError) {
-        throw authError
-      }
+      if (!authError) {
+        updateSucceeded = true
+      } else {
+        // If client update fails (e.g. Supabase project requires current password / reauthentication),
+        // call the serverless endpoint using the user's active session token
+        let token: string | null = null
+        const { data: sessionData } = await supabase.auth.getSession()
+        if (sessionData?.session?.access_token) {
+          token = sessionData.session.access_token
+        } else {
+          const { data: refreshData } = await supabase.auth.refreshSession()
+          token = refreshData?.session?.access_token || null
+        }
 
-      // 2. Update profile must_change_password to false
-      if (user?.id) {
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .update({ must_change_password: false, updated_at: new Date().toISOString() })
-          .eq('id', user.id)
+        if (!token) {
+          throw authError
+        }
 
-        if (profileError) {
-          console.error('[PasswordChange] Profile update error:', profileError)
+        const response = await fetch('/api/update-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ password })
+        })
+
+        const resData = await response.json().catch(() => null)
+
+        if (response.ok && resData?.success) {
+          updateSucceeded = true
+        } else {
+          throw new Error(resData?.error || authError.message || 'Failed to update password.')
         }
       }
 
-      await refreshProfile()
-      navigate('/', { replace: true })
+      if (updateSucceeded) {
+        // 2. Ensure profile must_change_password is set to false
+        if (user?.id) {
+          await supabase
+            .from('profiles')
+            .update({ must_change_password: false, updated_at: new Date().toISOString() })
+            .eq('id', user.id)
+        }
+
+        await refreshProfile()
+        navigate('/', { replace: true })
+      }
     } catch (err) {
       setErrorMsg((err as Error).message || 'Failed to update password. Please try again.')
     } finally {
