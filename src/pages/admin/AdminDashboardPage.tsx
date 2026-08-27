@@ -14,8 +14,8 @@ import {
   Clock,
   ArrowRight,
   RefreshCw,
-  AlertCircle,
-  Plus
+  Plus,
+  ShieldAlert
 } from 'lucide-react'
 
 interface ProjectStats {
@@ -71,7 +71,6 @@ export const AdminDashboardPage: React.FC = () => {
 
       if (projErr) throw projErr
       const allProjects = projectsData || []
-      setTotalProjects(allProjects.length)
 
       // 2. Fetch Active Employees count
       const { count: employeeCount, error: empErr } = await supabase
@@ -81,7 +80,6 @@ export const AdminDashboardPage: React.FC = () => {
         .eq('is_active', true)
 
       if (empErr) throw empErr
-      setTotalActiveEmployees(employeeCount || 0)
 
       // 3. Fetch Geofences
       const { data: geofencesData, error: geoErr } = await supabase
@@ -90,7 +88,6 @@ export const AdminDashboardPage: React.FC = () => {
 
       if (geoErr) throw geoErr
       const allGeofences = geofencesData || []
-      setTotalGeofences(allGeofences.filter((g) => g.is_active).length)
 
       // 4. Fetch Today's Daily Attendance records
       const { data: attendanceData, error: attErr } = await supabase
@@ -101,14 +98,6 @@ export const AdminDashboardPage: React.FC = () => {
       if (attErr) throw attErr
       const allAttendance = attendanceData || []
 
-      const present = allAttendance.filter((a) => a.status === 'present').length
-      const absent = allAttendance.filter((a) => a.status === 'absent').length
-      const signedIn = allAttendance.filter((a) => a.sign_in_time && !a.sign_out_time).length
-
-      setTodayPresent(present)
-      setTodayAbsent(absent)
-      setCurrentlySignedIn(signedIn)
-
       // 5. Fetch Assignments for project breakdown
       const { data: assignmentsData, error: assignErr } = await supabase
         .from('employee_project_assignments')
@@ -116,6 +105,17 @@ export const AdminDashboardPage: React.FC = () => {
 
       if (assignErr) throw assignErr
       const allAssignments = assignmentsData || []
+
+      const present = allAttendance.filter((a) => a.status === 'present').length
+      const absent = allAttendance.filter((a) => a.status === 'absent').length
+      const signedIn = allAttendance.filter((a) => a.sign_in_time && !a.sign_out_time).length
+
+      setTotalProjects(allProjects.length)
+      setTotalActiveEmployees(employeeCount || 0)
+      setTotalGeofences(allGeofences.filter((g) => g.is_active).length)
+      setTodayPresent(present)
+      setTodayAbsent(absent)
+      setCurrentlySignedIn(signedIn)
 
       // Build Project-wise Breakdown
       const breakdown: ProjectStats[] = allProjects.map((proj) => {
@@ -137,7 +137,7 @@ export const AdminDashboardPage: React.FC = () => {
 
       setProjectStats(breakdown)
     } catch (err) {
-      console.error('[AdminDashboard] Error loading data:', err)
+      console.error('[AdminDashboard] Database query error:', err)
       setErrorMsg((err as Error).message || 'Failed to fetch dashboard metrics from database.')
     } finally {
       setIsLoading(false)
@@ -182,7 +182,8 @@ export const AdminDashboardPage: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               onClick={fetchDashboardData}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 px-3.5 py-2 text-xs font-semibold text-white backdrop-blur-xs border border-white/10 hover:bg-white/20 transition-colors cursor-pointer"
+              disabled={isLoading}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 px-3.5 py-2 text-xs font-semibold text-white backdrop-blur-xs border border-white/10 hover:bg-white/20 disabled:opacity-50 transition-colors cursor-pointer"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
               <span>Refresh Data</span>
@@ -198,17 +199,42 @@ export const AdminDashboardPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Database Error Banner with Retry */}
       {errorMsg && (
-        <div className="flex items-center gap-2 rounded-xl bg-rose-50 p-4 text-xs font-medium text-rose-800 border border-rose-200">
-          <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
-          <span>{errorMsg}</span>
+        <div className="rounded-2xl border border-rose-200 bg-rose-50/90 p-6 shadow-xs space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-rose-100 p-2 text-rose-600">
+              <ShieldAlert className="h-6 w-6" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-rose-900">
+                Database Authorization / Query Error
+              </h3>
+              <p className="text-xs text-rose-700 leading-relaxed font-mono">
+                {errorMsg}
+              </p>
+              <p className="text-xs text-rose-600 pt-1">
+                If this is a PostgreSQL permission error (e.g. 42501), ensure the latest RLS migration script is executed in the Supabase SQL editor.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-rose-200/60">
+            <button
+              onClick={fetchDashboardData}
+              disabled={isLoading}
+              className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50 transition-colors cursor-pointer"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              <span>Retry Query</span>
+            </button>
+          </div>
         </div>
       )}
 
       {/* Top Metric Cards */}
       {isLoading ? (
-        <LoadingSpinner message="Calculating live attendance and project metrics..." />
-      ) : (
+        <LoadingSpinner message="Calculating live attendance and project metrics from database..." />
+      ) : errorMsg ? null : (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
             {/* Total Projects */}
