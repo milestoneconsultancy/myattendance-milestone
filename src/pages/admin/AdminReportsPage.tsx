@@ -293,6 +293,19 @@ export const AdminReportsPage: React.FC = () => {
       {/* Reports Table */}
       {isLoading ? (
         <LoadingSpinner message="Generating filtered attendance report..." />
+      ) : errorMsg && records.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-rose-200 bg-rose-50/50 p-12 text-center">
+          <AlertCircle className="h-10 w-10 text-rose-500 mb-3" />
+          <h3 className="text-sm font-bold text-rose-900">Database Query Error</h3>
+          <p className="mt-1 text-xs text-rose-700 max-w-md font-mono">{errorMsg}</p>
+          <button
+            onClick={fetchReportData}
+            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-rose-700 cursor-pointer"
+          >
+            <RefreshCw className="h-4 w-4" />
+            <span>Retry Query</span>
+          </button>
+        </div>
       ) : filteredRecords.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center">
           <FileBarChart className="h-10 w-10 text-slate-400 mb-3" />

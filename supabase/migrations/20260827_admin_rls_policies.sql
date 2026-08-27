@@ -368,3 +368,4 @@ TO authenticated
 WITH CHECK (
   actor_id = auth.uid() OR public.is_admin()
 );
+
