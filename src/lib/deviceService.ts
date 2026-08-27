@@ -139,7 +139,7 @@ export async function validateEmployeeDevice(employeeId: string): Promise<Device
 }
 
 /**
- * Binds the current client device to the authenticated employee in public.devices.
+ * Authoritatively binds the current client device to the authenticated employee via server API.
  */
 export async function bindCurrentDevice(employeeId: string): Promise<{ success: boolean; device?: Device; error?: string }> {
   if (!employeeId) {
@@ -148,42 +148,46 @@ export async function bindCurrentDevice(employeeId: string): Promise<{ success: 
 
   const currentDeviceId = getDeviceId()
   const currentDeviceName = getDeviceName()
-  const nowIso = new Date().toISOString()
 
   try {
-    // 1. Deactivate any existing active device records for this employee
-    await supabase
-      .from('devices')
-      .update({
-        is_active: false,
-        unbound_at: nowIso
-      })
-      .eq('employee_id', employeeId)
-      .eq('is_active', true)
-
-    // 2. Insert new active device binding
-    const { data: newDevice, error: insertErr } = await supabase
-      .from('devices')
-      .insert({
-        employee_id: employeeId,
-        device_id: currentDeviceId,
-        device_name: currentDeviceName,
-        is_active: true,
-        bound_at: nowIso,
-        last_used_at: nowIso
-      })
-      .select()
-      .single()
-
-    if (insertErr) {
-      console.error('[DeviceService] Failed to bind device:', insertErr)
-      return { success: false, error: insertErr.message }
+    let token: string | null = null
+    const { data: sessionData } = await supabase.auth.getSession()
+    if (sessionData?.session?.access_token) {
+      token = sessionData.session.access_token
+    } else {
+      const { data: refreshData } = await supabase.auth.refreshSession()
+      token = refreshData?.session?.access_token || null
     }
 
-    return { success: true, device: newDevice as Device }
+    if (!token) {
+      return { success: false, error: 'Session expired. Please log in again.' }
+    }
+
+    const response = await fetch('/api/bind-device', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        device_id: currentDeviceId,
+        device_name: currentDeviceName
+      })
+    })
+
+    const resData = await response.json().catch(() => null)
+
+    if (response.ok && resData?.success) {
+      return { success: true, device: resData.device as Device }
+    }
+
+    return {
+      success: false,
+      error: resData?.error || 'Failed to bind device to account.'
+    }
   } catch (err) {
     console.error('[DeviceService] Unexpected error during device binding:', err)
-    return { success: false, error: (err as Error).message }
+    return { success: false, error: (err as Error).message || 'Network error binding device.' }
   }
 }
 

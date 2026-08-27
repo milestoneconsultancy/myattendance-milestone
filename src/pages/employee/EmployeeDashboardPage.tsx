@@ -2,11 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuth } from '../../hooks/useAuth'
 import { calculateHaversineDistance, isWithinGeofence } from '../../lib/geoUtils'
-import { logAuditEvent } from '../../lib/auditService'
 import {
   validateEmployeeDevice,
   bindCurrentDevice,
-  touchDeviceUsage,
   type DeviceValidationResult
 } from '../../lib/deviceService'
 import type { Project, Geofence, DailyAttendance } from '../../types/database.types'
@@ -127,7 +125,7 @@ export const EmployeeDashboardPage: React.FC = () => {
 
       setAssignedProject(resolvedProject)
 
-      // 2. Fetch specific active geofences assigned to this employee
+      // 2. Fetch specific active geofences assigned to this employee (EXPLICIT ONLY, NO FALLBACK)
       let assignedGeos: Geofence[] = []
 
       if (resolvedProject) {
@@ -154,20 +152,6 @@ export const EmployeeDashboardPage: React.FC = () => {
           }
         } catch (geoErr) {
           console.warn('[EmployeeDashboard] Geofence assignment lookup notice:', geoErr)
-        }
-
-        // Fallback: If no specific geofences assigned yet, permit all active project sites
-        if (assignedGeos.length === 0) {
-          const { data: fallbackGeoData, error: fallbackGeoErr } = await supabase
-            .from('geofences')
-            .select('*')
-            .eq('project_id', resolvedProject.id)
-            .eq('is_active', true)
-            .order('name', { ascending: true })
-
-          if (!fallbackGeoErr && fallbackGeoData) {
-            assignedGeos = fallbackGeoData
-          }
         }
       }
 
@@ -214,19 +198,6 @@ export const EmployeeDashboardPage: React.FC = () => {
         throw new Error(res.error || 'Failed to link device.')
       }
 
-      await logAuditEvent({
-        actorId: user.id,
-        action: 'DEVICE_BIND',
-        entityType: 'devices',
-        entityId: res.device.id,
-        newData: {
-          employee_id: user.id,
-          device_id: res.device.device_id,
-          device_name: res.device.device_name
-        },
-        remark: `Employee linked device "${res.device.device_name}"`
-      })
-
       setActionSuccessMsg(`Device (${res.device.device_name}) successfully linked to your account!`)
       await loadEmployeeData()
     } catch (err) {
@@ -241,11 +212,11 @@ export const EmployeeDashboardPage: React.FC = () => {
   useEffect(() => {
     if (!navigator.geolocation) {
       setGeoError('GPS Geolocation is not supported by your browser.')
-      setIsLocating(false)
       return
     }
 
     setIsLocating(true)
+
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         setCurrentPosition({
@@ -253,17 +224,24 @@ export const EmployeeDashboardPage: React.FC = () => {
           longitude: pos.coords.longitude,
           accuracy: Math.round(pos.coords.accuracy)
         })
-        setGeoError(null)
         setIsLocating(false)
+        setGeoError(null)
       },
       (err) => {
-        console.warn('[Geolocation] Error:', err.message)
-        setGeoError(
-          err.code === 1
-            ? 'Location permission was denied. Please allow location access in your browser settings to record attendance.'
-            : 'Unable to acquire GPS fix. Please ensure location services are enabled.'
-        )
         setIsLocating(false)
+        switch (err.code) {
+          case err.PERMISSION_DENIED:
+            setGeoError('Location permission denied. Please allow GPS access in your browser settings to record attendance.')
+            break
+          case err.POSITION_UNAVAILABLE:
+            setGeoError('GPS position unavailable. Please ensure your device location is turned on.')
+            break
+          case err.TIMEOUT:
+            setGeoError('GPS acquisition timed out. Retrying high-accuracy fix...')
+            break
+          default:
+            setGeoError('Unable to retrieve GPS coordinates.')
+        }
       },
       {
         enableHighAccuracy: true,
@@ -277,13 +255,12 @@ export const EmployeeDashboardPage: React.FC = () => {
     }
   }, [])
 
-  // Geofence calculations
+  // Geofence proximity calculation
   let isInsideAnyGeofence = false
   let closestGeofence: { geofence: Geofence; distanceMeters: number } | null = null
+  let minDistance = Infinity
 
   if (currentPosition && activeGeofences.length > 0) {
-    let minDistance = Infinity
-
     for (const geo of activeGeofences) {
       const dist = Math.round(
         calculateHaversineDistance(
@@ -305,21 +282,31 @@ export const EmployeeDashboardPage: React.FC = () => {
     }
   }
 
-  // Handle Clock In (Sign In)
+  // Handle Clock In (Sign In) via Trusted Server API
   const handleClockIn = async () => {
     if (!user?.id || !assignedProject || !currentPosition) return
+
     if (profile?.is_active === false) {
       setErrorMsg('Attendance blocked: Your employee account is currently deactivated.')
       return
     }
-    if (deviceValidation?.status === 'NO_DEVICE') {
-      setErrorMsg('Attendance blocked: You must link this device to your employee account before clocking in.')
+
+    if (deviceValidation?.status !== 'MATCH') {
+      if (deviceValidation?.status === 'NO_DEVICE') {
+        setErrorMsg('Attendance blocked: You must link this device to your employee account before clocking in.')
+      } else if (deviceValidation?.status === 'MISMATCH') {
+        setErrorMsg(`Attendance blocked: Unauthorized device. Your account is locked to "${deviceValidation.boundDevice?.device_name || 'another device'}".`)
+      } else {
+        setErrorMsg('Attendance blocked: Device authorization could not be verified.')
+      }
       return
     }
-    if (deviceValidation?.status === 'MISMATCH') {
-      setErrorMsg(`Attendance blocked: Unauthorized device. Your account is locked to "${deviceValidation.boundDevice?.device_name || 'another device'}".`)
+
+    if (currentPosition.accuracy > 80) {
+      setErrorMsg(`Attendance blocked: GPS accuracy is too low (±${currentPosition.accuracy}m). High precision location required (within ±80m). Please move to an open area and try again.`)
       return
     }
+
     if (!isInsideAnyGeofence) {
       setErrorMsg('Attendance blocked: You must be inside your designated site geofence to clock in.')
       return
@@ -330,75 +317,41 @@ export const EmployeeDashboardPage: React.FC = () => {
     setActionSuccessMsg(null)
 
     try {
-      const nowIso = new Date().toISOString()
-      const todayDateStr = getLocalDateString()
-
-      // 1. Record event in attendance_events (using canonical columns)
-      const { error: eventErr } = await supabase.from('attendance_events').insert({
-        employee_id: user.id,
-        project_id: assignedProject.id,
-        geofence_id: closestGeofence?.geofence.id || null,
-        device_id: deviceValidation?.currentDeviceId || null,
-        event_type: 'SIGN_IN',
-        event_time: nowIso,
-        latitude: currentPosition.latitude,
-        longitude: currentPosition.longitude,
-        distance_meters: closestGeofence?.distanceMeters ?? null
-      })
-
-      if (eventErr) throw eventErr
-
-      // 2. Insert or update daily_attendance
-      if (todayAttendance) {
-        const { error: updateErr } = await supabase
-          .from('daily_attendance')
-          .update({
-            project_id: assignedProject.id,
-            sign_in_at: nowIso,
-            status: 'present',
-            attendance_source: 'geofence',
-            updated_at: nowIso
-          })
-          .eq('id', todayAttendance.id)
-
-        if (updateErr) throw updateErr
+      let token: string | null = null
+      const { data: sessionData } = await supabase.auth.getSession()
+      if (sessionData?.session?.access_token) {
+        token = sessionData.session.access_token
       } else {
-        const { error: insertErr } = await supabase.from('daily_attendance').insert({
-          employee_id: user.id,
-          project_id: assignedProject.id,
-          attendance_date: todayDateStr,
-          status: 'present',
-          sign_in_at: nowIso,
-          attendance_source: 'geofence'
-        })
-
-        if (insertErr) throw insertErr
+        const { data: refreshData } = await supabase.auth.refreshSession()
+        token = refreshData?.session?.access_token || null
       }
 
-      // 3. Touch device usage
-      if (deviceValidation?.currentDeviceId) {
-        await touchDeviceUsage(deviceValidation.currentDeviceId, user.id)
+      if (!token) {
+        throw new Error('Your session has expired. Please log in again.')
       }
 
-      await logAuditEvent({
-        actorId: user.id,
-        action: 'ATTENDANCE_CLOCK_IN',
-        entityType: 'daily_attendance',
-        entityId: user.id,
-        newData: {
-          project_id: assignedProject.id,
-          project_name: assignedProject.name,
-          device_id: deviceValidation?.currentDeviceId,
-          device_name: deviceValidation?.currentDeviceName,
+      const response = await fetch('/api/attendance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          action: 'CLOCK_IN',
           latitude: currentPosition.latitude,
           longitude: currentPosition.longitude,
-          closest_site: closestGeofence?.geofence.name,
-          distance_meters: closestGeofence?.distanceMeters
-        },
-        remark: `Clock In verified inside ${closestGeofence?.geofence.name || 'geofence'} on ${deviceValidation?.currentDeviceName || 'device'}`
+          accuracy: currentPosition.accuracy,
+          device_id: deviceValidation.currentDeviceId
+        })
       })
 
-      setActionSuccessMsg(`Successfully clocked in at ${closestGeofence?.geofence.name || assignedProject.name}!`)
+      const resData = await response.json().catch(() => null)
+
+      if (!response.ok || !resData?.success) {
+        throw new Error(resData?.error || 'Failed to record clock in.')
+      }
+
+      setActionSuccessMsg(resData.message || `Successfully clocked in at ${resData.site || assignedProject.name}!`)
       await loadEmployeeData()
     } catch (err) {
       console.error('[ClockIn] Error:', err)
@@ -408,17 +361,31 @@ export const EmployeeDashboardPage: React.FC = () => {
     }
   }
 
-  // Handle Clock Out (Sign Out)
+  // Handle Clock Out (Sign Out) via Trusted Server API
   const handleClockOut = async () => {
     if (!user?.id || !assignedProject || !todayAttendance?.sign_in_at || !currentPosition) return
+
     if (profile?.is_active === false) {
       setErrorMsg('Attendance blocked: Your employee account is currently deactivated.')
       return
     }
-    if (deviceValidation?.status === 'MISMATCH') {
-      setErrorMsg(`Attendance blocked: Unauthorized device. Your account is locked to "${deviceValidation.boundDevice?.device_name || 'another device'}".`)
+
+    if (deviceValidation?.status !== 'MATCH') {
+      if (deviceValidation?.status === 'NO_DEVICE') {
+        setErrorMsg('Attendance blocked: No authorized device is linked to your account.')
+      } else if (deviceValidation?.status === 'MISMATCH') {
+        setErrorMsg(`Attendance blocked: Unauthorized device. Your account is locked to "${deviceValidation.boundDevice?.device_name || 'another device'}".`)
+      } else {
+        setErrorMsg('Attendance blocked: Device authorization could not be verified.')
+      }
       return
     }
+
+    if (currentPosition.accuracy > 80) {
+      setErrorMsg(`Attendance blocked: GPS accuracy is too low (±${currentPosition.accuracy}m). High precision location required (within ±80m). Please move to an open area and try again.`)
+      return
+    }
+
     if (!isInsideAnyGeofence) {
       setErrorMsg('Attendance blocked: You must be inside your designated site geofence to clock out.')
       return
@@ -429,63 +396,41 @@ export const EmployeeDashboardPage: React.FC = () => {
     setActionSuccessMsg(null)
 
     try {
-      const nowIso = new Date().toISOString()
-      const signInTime = new Date(todayAttendance.sign_in_at).getTime()
-      const signOutTime = new Date(nowIso).getTime()
-      const workingMinutes = Math.max(0, Math.round((signOutTime - signInTime) / (1000 * 60)))
-
-      // 1. Record event in attendance_events (using canonical columns)
-      const { error: eventErr } = await supabase.from('attendance_events').insert({
-        employee_id: user.id,
-        project_id: assignedProject.id,
-        geofence_id: closestGeofence?.geofence.id || null,
-        device_id: deviceValidation?.currentDeviceId || null,
-        event_type: 'SIGN_OUT',
-        event_time: nowIso,
-        latitude: currentPosition.latitude,
-        longitude: currentPosition.longitude,
-        distance_meters: closestGeofence?.distanceMeters ?? null
-      })
-
-      if (eventErr) throw eventErr
-
-      // 2. Update daily_attendance
-      const { error: updateErr } = await supabase
-        .from('daily_attendance')
-        .update({
-          sign_out_at: nowIso,
-          working_minutes: workingMinutes,
-          updated_at: nowIso
-        })
-        .eq('id', todayAttendance.id)
-
-      if (updateErr) throw updateErr
-
-      // 3. Touch device usage
-      if (deviceValidation?.currentDeviceId) {
-        await touchDeviceUsage(deviceValidation.currentDeviceId, user.id)
+      let token: string | null = null
+      const { data: sessionData } = await supabase.auth.getSession()
+      if (sessionData?.session?.access_token) {
+        token = sessionData.session.access_token
+      } else {
+        const { data: refreshData } = await supabase.auth.refreshSession()
+        token = refreshData?.session?.access_token || null
       }
 
-      await logAuditEvent({
-        actorId: user.id,
-        action: 'ATTENDANCE_CLOCK_OUT',
-        entityType: 'daily_attendance',
-        entityId: todayAttendance.id,
-        newData: {
-          project_id: assignedProject.id,
-          project_name: assignedProject.name,
-          device_id: deviceValidation?.currentDeviceId,
-          device_name: deviceValidation?.currentDeviceName,
-          working_minutes: workingMinutes,
-          latitude: currentPosition.latitude,
-          longitude: currentPosition.longitude
+      if (!token) {
+        throw new Error('Your session has expired. Please log in again.')
+      }
+
+      const response = await fetch('/api/attendance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
-        remark: `Clock Out recorded with duration ${workingMinutes} mins on ${deviceValidation?.currentDeviceName || 'device'}`
+        body: JSON.stringify({
+          action: 'CLOCK_OUT',
+          latitude: currentPosition.latitude,
+          longitude: currentPosition.longitude,
+          accuracy: currentPosition.accuracy,
+          device_id: deviceValidation.currentDeviceId
+        })
       })
 
-      const hrs = Math.floor(workingMinutes / 60)
-      const mins = workingMinutes % 60
-      setActionSuccessMsg(`Successfully clocked out! Total working time: ${hrs}h ${mins}m.`)
+      const resData = await response.json().catch(() => null)
+
+      if (!response.ok || !resData?.success) {
+        throw new Error(resData?.error || 'Failed to record clock out.')
+      }
+
+      setActionSuccessMsg(resData.message || 'Successfully clocked out!')
       await loadEmployeeData()
     } catch (err) {
       console.error('[ClockOut] Error:', err)
