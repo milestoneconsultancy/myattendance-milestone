@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import type { User, Session } from '@supabase/supabase-js'
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient'
 import type { Profile, UserRole } from '../types/database.types'
@@ -15,56 +15,80 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [mustChangePassword, setMustChangePassword] = useState<boolean>(false)
   const [profileError, setProfileError] = useState<string | null>(null)
 
+  // Track in-flight profile fetch to avoid redundant duplicate queries
+  const inFlightFetchRef = useRef<Promise<Profile | null> | null>(null)
+
   const fetchProfile = useCallback(async (userId: string): Promise<Profile | null> => {
-    try {
-      setProfileError(null)
-
-      // Query authenticated user profile strictly by ID
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single()
-
-      if (error) {
-        console.error('[AuthContext] Error fetching profile for user ID:', userId, error.message)
-        setProfile(null)
-        setRole(null)
-        setProfileError(`Failed to load profile: ${error.message}`)
-        return null
-      }
-
-      if (!data) {
-        console.error('[AuthContext] No profile found for user ID:', userId)
-        setProfile(null)
-        setRole(null)
-        setProfileError('Profile record not found in database.')
-        return null
-      }
-
-      const userProfile = data as Profile
-
-      // Authoritative role assignment - strictly from database profile, no unsafe fallbacks
-      if (userProfile.role !== 'admin' && userProfile.role !== 'employee') {
-        console.error('[AuthContext] Invalid role in database profile:', userProfile.role)
-        setProfile(userProfile)
-        setRole(null)
-        setProfileError(`Invalid role "${userProfile.role}" configured in database.`)
-        return null
-      }
-
-      setProfile(userProfile)
-      setRole(userProfile.role)
-      setMustChangePassword(Boolean(userProfile.must_change_password))
-      setProfileError(null)
-      return userProfile
-    } catch (err) {
-      console.error('[AuthContext] Unexpected error fetching profile:', err)
+    if (!userId) {
       setProfile(null)
       setRole(null)
-      setProfileError((err as Error).message || 'Failed to fetch user profile.')
       return null
     }
+
+    // Reuse existing in-flight request if already querying the same user
+    if (inFlightFetchRef.current) {
+      return inFlightFetchRef.current
+    }
+
+    const fetchPromise = (async () => {
+      try {
+        setProfileError(null)
+
+        // Safe diagnostic log: Log authenticated user ID ONLY
+        console.log('[Auth] Fetching profile for user ID:', userId)
+
+        const { data, error, status } = await supabase
+          .from('profiles')
+          .select('id, email, full_name, role, phone, employee_code, must_change_password, is_active, created_at, updated_at')
+          .eq('id', userId)
+          .maybeSingle()
+
+        if (error) {
+          console.error('[Auth] Profile query failed for user ID:', userId, 'Status:', status, 'Error:', error.message, 'Code:', error.code)
+          setProfile(null)
+          setRole(null)
+          setProfileError(`Profile query failed (Code: ${error.code || 'UNKNOWN'}): ${error.message}`)
+          return null
+        }
+
+        if (!data) {
+          console.warn('[Auth] No profile record exists in profiles table for user ID:', userId)
+          setProfile(null)
+          setRole(null)
+          setProfileError(`No profile found in database for user ID (${userId}). Please ensure a row exists in the profiles table.`)
+          return null
+        }
+
+        const userProfile = data as Profile
+
+        // Authoritative role validation
+        if (userProfile.role !== 'admin' && userProfile.role !== 'employee') {
+          console.error('[Auth] Invalid role configured in database profile:', userProfile.role)
+          setProfile(userProfile)
+          setRole(null)
+          setProfileError(`Invalid role "${userProfile.role}" configured in database profile.`)
+          return null
+        }
+
+        console.log('[Auth] Profile successfully loaded for user ID:', userId, 'Role:', userProfile.role)
+        setProfile(userProfile)
+        setRole(userProfile.role)
+        setMustChangePassword(Boolean(userProfile.must_change_password))
+        setProfileError(null)
+        return userProfile
+      } catch (err) {
+        console.error('[Auth] Unexpected error fetching profile:', err)
+        setProfile(null)
+        setRole(null)
+        setProfileError((err as Error).message || 'Failed to fetch user profile.')
+        return null
+      } finally {
+        inFlightFetchRef.current = null
+      }
+    })()
+
+    inFlightFetchRef.current = fetchPromise
+    return fetchPromise
   }, [])
 
   const refreshProfile = useCallback(async () => {
@@ -91,24 +115,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } = await supabase.auth.getSession()
 
         if (sessionErr) {
-          console.error('[AuthContext] Session retrieval error:', sessionErr.message)
+          console.error('[Auth] Session retrieval error:', sessionErr.message)
         }
 
         if (!mounted) return
 
-        setSession(initialSession)
-        setUser(initialSession?.user ?? null)
-
-        if (initialSession?.user?.id) {
+        if (initialSession?.user) {
+          setSession(initialSession)
+          setUser(initialSession.user)
           await fetchProfile(initialSession.user.id)
         } else {
+          setSession(null)
+          setUser(null)
           setProfile(null)
           setRole(null)
           setMustChangePassword(false)
           setProfileError(null)
         }
       } catch (err) {
-        console.error('[AuthContext] Auth initialization error:', err)
+        console.error('[Auth] Auth initialization error:', err)
       } finally {
         if (mounted) {
           setIsLoading(false)
@@ -197,7 +222,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setMustChangePassword(false)
       setProfileError(null)
     } catch (err) {
-      console.error('[AuthContext] Sign out error:', err)
+      console.error('[Auth] Sign out error:', err)
     } finally {
       setIsLoading(false)
     }

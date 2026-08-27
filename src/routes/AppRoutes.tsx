@@ -13,14 +13,19 @@ import { LoadingSpinner } from '../components/common/LoadingSpinner'
 
 // Smart index redirect based strictly on authoritative database role
 const HomeRedirect: React.FC = () => {
-  const { isAuthenticated, isLoading, role } = useAuth()
+  const { isAuthenticated, isLoading, role, profileError } = useAuth()
 
-  if (isLoading) {
+  // Wait until session and role are definitively resolved
+  if (isLoading || (isAuthenticated && !role && !profileError)) {
     return <LoadingSpinner fullScreen message="Checking permissions..." />
   }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
+  }
+
+  if (profileError) {
+    return <Navigate to="/dashboard" replace />
   }
 
   if (role === 'admin') {
@@ -31,8 +36,7 @@ const HomeRedirect: React.FC = () => {
     return <Navigate to="/dashboard" replace />
   }
 
-  // If authenticated but role could not be resolved, stay on layout to show error
-  return <Navigate to="/dashboard" replace />
+  return <Navigate to="/login" replace />
 }
 
 export const AppRoutes: React.FC = () => {
