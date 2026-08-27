@@ -266,12 +266,11 @@ export type Database = {
           employee_id: string
           project_id: string | null
           attendance_date: string
-          sign_in_time: string | null
-          sign_out_time: string | null
-          total_working_hours: number | null
           status: AttendanceStatus
-          is_adjusted: boolean
-          adjustment_remark: string | null
+          sign_in_at: string | null
+          sign_out_at: string | null
+          working_minutes: number | null
+          attendance_source: string
           created_at: string
           updated_at: string
         }
@@ -280,12 +279,11 @@ export type Database = {
           employee_id: string
           project_id?: string | null
           attendance_date?: string
-          sign_in_time?: string | null
-          sign_out_time?: string | null
-          total_working_hours?: number | null
           status?: AttendanceStatus
-          is_adjusted?: boolean
-          adjustment_remark?: string | null
+          sign_in_at?: string | null
+          sign_out_at?: string | null
+          working_minutes?: number | null
+          attendance_source?: string
           created_at?: string
           updated_at?: string
         }
@@ -294,12 +292,11 @@ export type Database = {
           employee_id?: string
           project_id?: string | null
           attendance_date?: string
-          sign_in_time?: string | null
-          sign_out_time?: string | null
-          total_working_hours?: number | null
           status?: AttendanceStatus
-          is_adjusted?: boolean
-          adjustment_remark?: string | null
+          sign_in_at?: string | null
+          sign_out_at?: string | null
+          working_minutes?: number | null
+          attendance_source?: string
           created_at?: string
           updated_at?: string
         }

@@ -16,6 +16,32 @@ interface ReportAttendanceRecord extends DailyAttendance {
   project?: Project | null
 }
 
+// Helper to format ISO timestamptz to 12-hour IST string (e.g., 09:30 AM)
+const formatTimeIST = (timestampStr: string | null | undefined): string => {
+  if (!timestampStr) return '—'
+  try {
+    const date = new Date(timestampStr)
+    return new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    }).format(date)
+  } catch {
+    return '—'
+  }
+}
+
+// Helper to format working minutes to readable hours and minutes (e.g., 8 hrs 15 mins)
+const formatWorkingMinutes = (minutes: number | null | undefined): string => {
+  if (minutes === null || minutes === undefined || minutes <= 0) return '—'
+  const hrs = Math.floor(minutes / 60)
+  const mins = minutes % 60
+  if (hrs === 0) return `${mins} mins`
+  if (mins === 0) return `${hrs} hrs`
+  return `${hrs} hrs ${mins} mins`
+}
+
 export const AdminReportsPage: React.FC = () => {
   const [records, setRecords] = useState<ReportAttendanceRecord[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -68,7 +94,7 @@ export const AdminReportsPage: React.FC = () => {
       } else if (statusFilter === 'absent') {
         filtered = filtered.filter((r) => r.status === 'absent')
       } else if (statusFilter === 'adjusted') {
-        filtered = filtered.filter((r) => r.is_adjusted)
+        filtered = filtered.filter((r) => r.attendance_source === 'manual_admin')
       }
 
       setRecords(filtered)
@@ -115,11 +141,10 @@ export const AdminReportsPage: React.FC = () => {
       'Project / Site',
       'Date',
       'Status',
-      'Sign In Time',
-      'Sign Out Time',
-      'Working Hours',
-      'Is Adjusted',
-      'Adjustment Remark'
+      'Sign In (IST)',
+      'Sign Out (IST)',
+      'Working Duration',
+      'Attendance Source'
     ]
 
     const rows = records.map((r) => [
@@ -130,11 +155,10 @@ export const AdminReportsPage: React.FC = () => {
       `"${r.project?.name || ''}"`,
       `"${r.attendance_date}"`,
       `"${r.status.toUpperCase()}"`,
-      `"${r.sign_in_time || ''}"`,
-      `"${r.sign_out_time || ''}"`,
-      `"${r.total_working_hours || ''}"`,
-      `"${r.is_adjusted ? 'YES' : 'NO'}"`,
-      `"${(r.adjustment_remark || '').replace(/"/g, '""')}"`
+      `"${formatTimeIST(r.sign_in_at)}"`,
+      `"${formatTimeIST(r.sign_out_at)}"`,
+      `"${formatWorkingMinutes(r.working_minutes)}"`,
+      `"${r.attendance_source === 'manual_admin' ? 'Manual Admin Adjustment' : r.attendance_source || 'System'}"`
     ])
 
     const csvContent =
@@ -328,10 +352,10 @@ export const AdminReportsPage: React.FC = () => {
                   <th className="py-3.5 px-4">Site / Project</th>
                   <th className="py-3.5 px-4">Date</th>
                   <th className="py-3.5 px-4">Status</th>
-                  <th className="py-3.5 px-4">Sign In</th>
-                  <th className="py-3.5 px-4">Sign Out</th>
+                  <th className="py-3.5 px-4">Sign In (IST)</th>
+                  <th className="py-3.5 px-4">Sign Out (IST)</th>
                   <th className="py-3.5 px-4">Duration</th>
-                  <th className="py-3.5 px-4 sm:px-6">Adjustment Reason</th>
+                  <th className="py-3.5 px-4 sm:px-6">Source</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -353,28 +377,23 @@ export const AdminReportsPage: React.FC = () => {
                       <StatusBadge status={record.status} activeLabel="PRESENT" inactiveLabel="ABSENT" />
                     </td>
                     <td className="py-4 px-4 font-mono text-[11px] text-slate-700">
-                      {record.sign_in_time || '—'}
+                      {formatTimeIST(record.sign_in_at)}
                     </td>
                     <td className="py-4 px-4 font-mono text-[11px] text-slate-700">
-                      {record.sign_out_time || '—'}
+                      {formatTimeIST(record.sign_out_at)}
                     </td>
                     <td className="py-4 px-4 font-mono text-[11px] text-slate-600">
-                      {record.total_working_hours ? `${record.total_working_hours} hrs` : '—'}
+                      {formatWorkingMinutes(record.working_minutes)}
                     </td>
                     <td className="py-4 px-4 sm:px-6">
-                      {record.is_adjusted ? (
-                        <div>
-                          <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
-                            * Adjusted by Admin
-                          </span>
-                          {record.adjustment_remark && (
-                            <p className="mt-0.5 text-[10px] text-slate-600 italic">
-                              "{record.adjustment_remark}"
-                            </p>
-                          )}
-                        </div>
+                      {record.attendance_source === 'manual_admin' ? (
+                        <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
+                          * Adjusted by Admin
+                        </span>
                       ) : (
-                        <span className="text-slate-400 text-[11px]">Original</span>
+                        <span className="text-slate-500 text-[11px] capitalize">
+                          {record.attendance_source ? record.attendance_source.replace(/_/g, ' ') : 'System'}
+                        </span>
                       )}
                     </td>
                   </tr>

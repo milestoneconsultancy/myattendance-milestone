@@ -108,7 +108,7 @@ export const AdminDashboardPage: React.FC = () => {
 
       const present = allAttendance.filter((a) => a.status === 'present').length
       const absent = allAttendance.filter((a) => a.status === 'absent').length
-      const signedIn = allAttendance.filter((a) => a.sign_in_time && !a.sign_out_time).length
+      const signedIn = allAttendance.filter((a) => a.sign_in_at && !a.sign_out_at).length
 
       setTotalProjects(allProjects.length)
       setTotalActiveEmployees(employeeCount || 0)

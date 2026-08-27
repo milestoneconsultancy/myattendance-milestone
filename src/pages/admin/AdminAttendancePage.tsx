@@ -23,6 +23,66 @@ interface AttendanceRecordDetail extends DailyAttendance {
   project?: Project | null
 }
 
+// Helper to format ISO timestamptz to 12-hour IST string (e.g., 09:30 AM)
+const formatTimeIST = (timestampStr: string | null | undefined): string => {
+  if (!timestampStr) return '—'
+  try {
+    const date = new Date(timestampStr)
+    return new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    }).format(date)
+  } catch {
+    return '—'
+  }
+}
+
+// Helper to extract HH:mm for the adjustment form input in IST
+const getHHMMFromTimestamp = (timestampStr: string | null | undefined, fallback: string): string => {
+  if (!timestampStr) return fallback
+  try {
+    const date = new Date(timestampStr)
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).formatToParts(date)
+    const hour = parts.find((p) => p.type === 'hour')?.value || '09'
+    const minute = parts.find((p) => p.type === 'minute')?.value || '00'
+    return `${hour}:${minute}`
+  } catch {
+    return fallback
+  }
+}
+
+// Helper to convert Date + HH:mm input into an ISO Timestamptz string for IST (+05:30)
+const convertTimeToISTTimestamp = (dateStr: string, timeStr: string | null): string | null => {
+  if (!timeStr || !dateStr) return null
+  return `${dateStr}T${timeStr}:00+05:30`
+}
+
+// Helper to calculate total working duration in minutes
+const calculateWorkingMinutes = (signInAt: string | null, signOutAt: string | null): number | null => {
+  if (!signInAt || !signOutAt) return null
+  const start = new Date(signInAt).getTime()
+  const end = new Date(signOutAt).getTime()
+  if (isNaN(start) || isNaN(end) || end <= start) return null
+  return Math.round((end - start) / (1000 * 60))
+}
+
+// Helper to format working minutes to readable hours and minutes (e.g., 8 hrs 15 mins)
+const formatWorkingMinutes = (minutes: number | null | undefined): string => {
+  if (minutes === null || minutes === undefined || minutes <= 0) return '—'
+  const hrs = Math.floor(minutes / 60)
+  const mins = minutes % 60
+  if (hrs === 0) return `${mins} mins`
+  if (mins === 0) return `${hrs} hrs`
+  return `${hrs} hrs ${mins} mins`
+}
+
 export const AdminAttendancePage: React.FC = () => {
   const { user } = useAuth()
 
@@ -51,8 +111,8 @@ export const AdminAttendancePage: React.FC = () => {
   const [adjustingRecord, setAdjustingRecord] = useState<AttendanceRecordDetail | null>(null)
   const [adjustFormData, setAdjustFormData] = useState({
     status: 'present' as 'present' | 'absent',
-    sign_in_time: '',
-    sign_out_time: '',
+    inputTimeIn: '09:00',
+    inputTimeOut: '18:00',
     remark: ''
   })
   const [isAdjusting, setIsAdjusting] = useState(false)
@@ -113,9 +173,9 @@ export const AdminAttendancePage: React.FC = () => {
   const handleOpenAdjust = (record: AttendanceRecordDetail) => {
     setAdjustingRecord(record)
     setAdjustFormData({
-      status: record.status,
-      sign_in_time: record.sign_in_time || '09:00',
-      sign_out_time: record.sign_out_time || '18:00',
+      status: record.status as 'present' | 'absent',
+      inputTimeIn: getHHMMFromTimestamp(record.sign_in_at, '09:00'),
+      inputTimeOut: getHHMMFromTimestamp(record.sign_out_at, '18:00'),
       remark: ''
     })
     setIsAdjustModalOpen(true)
@@ -135,30 +195,41 @@ export const AdminAttendancePage: React.FC = () => {
     setSuccessMsg(null)
 
     try {
+      const signInAt =
+        adjustFormData.status === 'present'
+          ? convertTimeToISTTimestamp(adjustingRecord.attendance_date, adjustFormData.inputTimeIn)
+          : null
+      const signOutAt =
+        adjustFormData.status === 'present'
+          ? convertTimeToISTTimestamp(adjustingRecord.attendance_date, adjustFormData.inputTimeOut)
+          : null
+      const workingMinutes = calculateWorkingMinutes(signInAt, signOutAt)
+
       const previousValue = {
         status: adjustingRecord.status,
-        sign_in_time: adjustingRecord.sign_in_time,
-        sign_out_time: adjustingRecord.sign_out_time,
-        is_adjusted: adjustingRecord.is_adjusted
+        sign_in_at: adjustingRecord.sign_in_at,
+        sign_out_at: adjustingRecord.sign_out_at,
+        working_minutes: adjustingRecord.working_minutes,
+        attendance_source: adjustingRecord.attendance_source
       }
 
       const newValue = {
         status: adjustFormData.status,
-        sign_in_time: adjustFormData.sign_in_time || null,
-        sign_out_time: adjustFormData.sign_out_time || null,
-        is_adjusted: true,
-        adjustment_remark: adjustFormData.remark.trim()
+        sign_in_at: signInAt,
+        sign_out_at: signOutAt,
+        working_minutes: workingMinutes,
+        attendance_source: 'manual_admin'
       }
 
-      // 1. Update daily_attendance record
+      // 1. Update daily_attendance record in production
       const { error: updateErr } = await supabase
         .from('daily_attendance')
         .update({
           status: adjustFormData.status,
-          sign_in_time: adjustFormData.status === 'present' ? adjustFormData.sign_in_time : null,
-          sign_out_time: adjustFormData.status === 'present' ? adjustFormData.sign_out_time : null,
-          is_adjusted: true,
-          adjustment_remark: adjustFormData.remark.trim(),
+          sign_in_at: signInAt,
+          sign_out_at: signOutAt,
+          working_minutes: workingMinutes,
+          attendance_source: 'manual_admin',
           updated_at: new Date().toISOString()
         })
         .eq('id', adjustingRecord.id)
@@ -398,28 +469,23 @@ export const AdminAttendancePage: React.FC = () => {
                       <StatusBadge status={record.status} activeLabel="PRESENT" inactiveLabel="ABSENT" />
                     </td>
                     <td className="py-4 px-4 font-mono text-[11px] text-slate-700">
-                      {record.sign_in_time || '—'}
+                      {formatTimeIST(record.sign_in_at)}
                     </td>
                     <td className="py-4 px-4 font-mono text-[11px] text-slate-700">
-                      {record.sign_out_time || '—'}
+                      {formatTimeIST(record.sign_out_at)}
                     </td>
                     <td className="py-4 px-4 font-mono text-[11px] text-slate-600">
-                      {record.total_working_hours ? `${record.total_working_hours} hrs` : '—'}
+                      {formatWorkingMinutes(record.working_minutes)}
                     </td>
                     <td className="py-4 px-4">
-                      {record.is_adjusted ? (
-                        <div>
-                          <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
-                            * Adjusted by Admin
-                          </span>
-                          {record.adjustment_remark && (
-                            <p className="mt-0.5 text-[10px] text-slate-500 italic max-w-xs truncate">
-                              "{record.adjustment_remark}"
-                            </p>
-                          )}
-                        </div>
+                      {record.attendance_source === 'manual_admin' ? (
+                        <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
+                          * Adjusted by Admin
+                        </span>
                       ) : (
-                        <span className="text-slate-400 text-[11px]">Original</span>
+                        <span className="text-slate-500 text-[11px] capitalize">
+                          {record.attendance_source ? record.attendance_source.replace(/_/g, ' ') : 'System'}
+                        </span>
                       )}
                     </td>
                     <td className="py-4 px-4 sm:px-6 text-right">
@@ -487,9 +553,9 @@ export const AdminAttendancePage: React.FC = () => {
                 </label>
                 <input
                   type="time"
-                  value={adjustFormData.sign_in_time}
+                  value={adjustFormData.inputTimeIn}
                   onChange={(e) =>
-                    setAdjustFormData({ ...adjustFormData, sign_in_time: e.target.value })
+                    setAdjustFormData({ ...adjustFormData, inputTimeIn: e.target.value })
                   }
                   className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2 px-3 text-xs text-slate-900 focus:border-sky-500 focus:bg-white focus:outline-none"
                 />
@@ -501,9 +567,9 @@ export const AdminAttendancePage: React.FC = () => {
                 </label>
                 <input
                   type="time"
-                  value={adjustFormData.sign_out_time}
+                  value={adjustFormData.inputTimeOut}
                   onChange={(e) =>
-                    setAdjustFormData({ ...adjustFormData, sign_out_time: e.target.value })
+                    setAdjustFormData({ ...adjustFormData, inputTimeOut: e.target.value })
                   }
                   className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-2 px-3 text-xs text-slate-900 focus:border-sky-500 focus:bg-white focus:outline-none"
                 />
