@@ -55,7 +55,7 @@ export const AdminAssignmentsPage: React.FC = () => {
       const { data: assignData, error: assignErr } = await supabase
         .from('employee_project_assignments')
         .select('*, employee:profiles(*), project:projects(*)')
-        .order('assigned_at', { ascending: false })
+        .order('created_at', { ascending: false })
 
       if (assignErr) throw assignErr
       setAssignments((assignData || []) as AssignmentDetail[])
@@ -354,11 +354,13 @@ export const AdminAssignmentsPage: React.FC = () => {
                     <td className="py-4 px-4 text-slate-500">
                       <div className="flex items-center gap-1.5">
                         <Clock className="h-3.5 w-3.5 text-slate-400" />
-                        {new Date(assignment.assigned_at).toLocaleDateString('en-IN', {
-                          day: '2-digit',
-                          month: 'short',
-                          year: 'numeric'
-                        })}
+                        {assignment.created_at
+                          ? new Date(assignment.created_at).toLocaleDateString('en-IN', {
+                              day: '2-digit',
+                              month: 'short',
+                              year: 'numeric'
+                            })
+                          : '—'}
                       </div>
                     </td>
                     <td className="py-4 px-4 sm:px-6 text-right">

@@ -128,21 +128,21 @@ export type Database = {
           id: string
           employee_id: string
           project_id: string
-          assigned_at: string
+          created_at: string
           assigned_by: string | null
         }
         Insert: {
           id?: string
           employee_id: string
           project_id: string
-          assigned_at?: string
+          created_at?: string
           assigned_by?: string | null
         }
         Update: {
           id?: string
           employee_id?: string
           project_id?: string
-          assigned_at?: string
+          created_at?: string
           assigned_by?: string | null
         }
         Relationships: [
