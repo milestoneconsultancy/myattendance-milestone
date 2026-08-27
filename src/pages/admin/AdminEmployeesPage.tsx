@@ -384,7 +384,7 @@ export const AdminEmployeesPage: React.FC = () => {
       if (toDeactivate.length > 0) {
         await supabase
           .from('employee_geofence_assignments')
-          .update({ is_active: false })
+          .update({ is_active: false, assigned_to: todayStr })
           .eq('employee_id', managingEmployee.id)
           .in('geofence_id', toDeactivate)
       }
@@ -529,10 +529,11 @@ export const AdminEmployeesPage: React.FC = () => {
     if (!bulkRemoveProjectId || bulkRemoveGeofenceIds.length === 0 || selectedEmployeeIds.length === 0) return
     setIsProcessingBulkRemove(true)
     setErrorMsg(null)
+    const todayStr = new Date().toISOString().split('T')[0]
     try {
       await supabase
         .from('employee_geofence_assignments')
-        .update({ is_active: false })
+        .update({ is_active: false, assigned_to: todayStr })
         .in('employee_id', selectedEmployeeIds)
         .in('geofence_id', bulkRemoveGeofenceIds)
 
