@@ -316,7 +316,8 @@ export default async function handler(req, res) {
         user_metadata: {
           full_name: cleanName,
           role: 'employee',
-          employee_code: cleanCode
+          employee_code: cleanCode,
+          phone: cleanPhone
         }
       })
 
@@ -329,26 +330,47 @@ export default async function handler(req, res) {
 
       createdAuthUserId = authData.user.id
 
-      // Step B: Insert public.profiles (EXACT MATCH to auth.users.id)
-      const { data: newProfile, error: profileInsertErr } = await adminClient
+      // Step B: Resolve trigger-created public.profiles record
+      let newProfile = null
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { data: pData } = await adminClient
+          .from('profiles')
+          .select('*')
+          .eq('id', createdAuthUserId)
+          .maybeSingle()
+
+        if (pData) {
+          newProfile = pData
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+
+      if (!newProfile) {
+        throw new Error('Profile creation failed: trigger did not create profile record in public.profiles.')
+      }
+      profileCreated = true
+
+      // Synchronize employee fields on the trigger-created profile
+      const { data: updatedProfile, error: profileUpdateErr } = await adminClient
         .from('profiles')
-        .insert({
-          id: createdAuthUserId,
+        .update({
           full_name: cleanName,
           email: cleanEmail,
           employee_code: cleanCode,
           phone: cleanPhone,
           role: 'employee',
           must_change_password: true,
-          is_active: true
+          is_active: true,
+          updated_at: new Date().toISOString()
         })
+        .eq('id', createdAuthUserId)
         .select()
         .single()
 
-      if (profileInsertErr) {
-        throw new Error(`Profile creation failed: ${profileInsertErr.message}`)
+      if (!profileUpdateErr && updatedProfile) {
+        newProfile = updatedProfile
       }
-      profileCreated = true
 
       // Step C: Insert public.employee_project_assignments
       const todayDateStr = new Date().toISOString().split('T')[0]
