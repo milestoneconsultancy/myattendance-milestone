@@ -117,8 +117,10 @@ export default async function handler(req, res) {
 
     // b) adminClient: runs with service_role key (privileged admin operations)
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-      global: { headers: { Authorization: `Bearer ${serviceRoleKey}` } },
-      auth: { persistSession: false, autoRefreshToken: false }
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false
+      }
     })
 
     // 4. Verify caller JWT token
@@ -259,24 +261,43 @@ export default async function handler(req, res) {
     }
 
     // 9. Validate Project & Geofences
+    const cleanProjectId = String(project_id || '').trim()
     const { data: targetProject, error: projErr } = await adminClient
       .from('projects')
-      .select('id, name, is_active')
-      .eq('id', project_id)
+      .select('id, name, code, is_active')
+      .eq('id', cleanProjectId)
       .maybeSingle()
 
-    if (projErr || !targetProject) {
-      return res.status(400).json({ error: 'Selected project does not exist.' })
+    if (projErr) {
+      console.error('[API create-employee] Project lookup failed:', projErr)
+      return res.status(500).json({
+        error: `Project lookup failed: ${projErr.message}`
+      })
+    }
+
+    if (!targetProject) {
+      return res.status(400).json({
+        error: `Selected project does not exist. (ID: ${cleanProjectId})`
+      })
     }
 
     const { data: validGeofences, error: geoErr } = await adminClient
       .from('geofences')
       .select('id, name, project_id, is_active')
-      .eq('project_id', project_id)
+      .eq('project_id', cleanProjectId)
       .in('id', geofence_ids)
 
-    if (geoErr || !validGeofences || validGeofences.length === 0) {
-      return res.status(400).json({ error: 'None of the selected geofences belong to the specified project.' })
+    if (geoErr) {
+      console.error('[API create-employee] Geofence lookup failed:', geoErr)
+      return res.status(500).json({
+        error: `Geofence lookup failed: ${geoErr.message}`
+      })
+    }
+
+    if (!validGeofences || validGeofences.length === 0) {
+      return res.status(400).json({
+        error: 'None of the selected geofences belong to the specified project.'
+      })
     }
 
     const validGeofenceIds = validGeofences.map(g => g.id)
@@ -335,7 +356,7 @@ export default async function handler(req, res) {
         .from('employee_project_assignments')
         .insert({
           employee_id: createdAuthUserId,
-          project_id: project_id,
+          project_id: cleanProjectId,
           assigned_from: todayDateStr,
           is_active: true
         })
@@ -374,7 +395,7 @@ export default async function handler(req, res) {
             email: cleanEmail,
             employee_code: cleanCode,
             phone: cleanPhone,
-            project_id: project_id,
+            project_id: cleanProjectId,
             geofence_ids: validGeofenceIds
           },
           remark: `Created employee profile for ${cleanName} (${cleanEmail})`
@@ -386,7 +407,7 @@ export default async function handler(req, res) {
           entity_id: createdAuthUserId,
           new_data: {
             employee_id: createdAuthUserId,
-            project_id: project_id,
+            project_id: cleanProjectId,
             project_name: targetProject.name
           },
           remark: `Assigned ${cleanName} to project "${targetProject.name}"`
