@@ -174,6 +174,51 @@ export type Database = {
           }
         ]
       }
+      employee_geofence_assignments: {
+        Row: {
+          id: string
+          employee_id: string
+          geofence_id: string
+          assigned_from: string
+          assigned_to: string | null
+          is_active: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          employee_id: string
+          geofence_id: string
+          assigned_from?: string
+          assigned_to?: string | null
+          is_active?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          employee_id?: string
+          geofence_id?: string
+          assigned_from?: string
+          assigned_to?: string | null
+          is_active?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'employee_geofence_assignments_employee_id_fkey'
+            columns: ['employee_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'employee_geofence_assignments_geofence_id_fkey'
+            columns: ['geofence_id']
+            isOneToOne: false
+            referencedRelation: 'geofences'
+            referencedColumns: ['id']
+          }
+        ]
+      }
       devices: {
         Row: {
           id: string
@@ -456,6 +501,7 @@ export type Profile = Database['public']['Tables']['profiles']['Row']
 export type Project = Database['public']['Tables']['projects']['Row']
 export type Geofence = Database['public']['Tables']['geofences']['Row']
 export type EmployeeProjectAssignment = Database['public']['Tables']['employee_project_assignments']['Row']
+export type EmployeeGeofenceAssignment = Database['public']['Tables']['employee_geofence_assignments']['Row']
 export type Device = Database['public']['Tables']['devices']['Row']
 export type AttendanceEvent = Database['public']['Tables']['attendance_events']['Row']
 export type DailyAttendance = Database['public']['Tables']['daily_attendance']['Row']

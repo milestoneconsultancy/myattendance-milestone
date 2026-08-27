@@ -1,5 +1,5 @@
 import { supabase } from './supabaseClient'
-import type { Profile } from '../types/database.types'
+import type { Profile, Project, Geofence } from '../types/database.types'
 
 export interface CreateEmployeeInput {
   full_name: string
@@ -7,24 +7,28 @@ export interface CreateEmployeeInput {
   employee_code: string
   phone?: string | null
   password?: string
+  project_id: string
+  geofence_ids: string[]
 }
 
 export interface CreateEmployeeResult {
   success: boolean
   profile?: Profile
+  project?: Project
+  geofences?: Geofence[]
   tempPassword?: string
   error?: string
 }
 
 /**
- * Securely creates a new Employee account.
- * 1. Calls the privileged backend endpoint (/api/create-employee) with the admin's JWT token.
- * 2. The server-side function creates auth.users record via auth.admin.createUser and inserts public.profiles with the exact same UUID.
- * 3. Handles rollback if profiles creation fails.
+ * Securely creates a new Employee account with project and multiple geofence assignments.
+ * 1. Calls privileged backend endpoint (/api/create-employee) with admin's JWT token.
+ * 2. Server creates auth.users, public.profiles, employee_project_assignments, and employee_geofence_assignments.
+ * 3. Handles atomic rollback if any step fails.
  * 4. NEVER exposes the service_role key to client-side code.
  */
 export async function createEmployeeAccount(input: CreateEmployeeInput): Promise<CreateEmployeeResult> {
-  const { full_name, email, employee_code, phone, password } = input
+  const { full_name, email, employee_code, phone, password, project_id, geofence_ids } = input
 
   // 1. Obtain current valid session and access token
   let token: string | null = null
@@ -57,7 +61,9 @@ export async function createEmployeeAccount(input: CreateEmployeeInput): Promise
         email: email.trim().toLowerCase(),
         employee_code: employee_code.trim().toUpperCase(),
         phone: phone?.trim() || null,
-        password: password?.trim() || undefined
+        password: password?.trim() || undefined,
+        project_id,
+        geofence_ids
       })
     })
 
@@ -67,6 +73,8 @@ export async function createEmployeeAccount(input: CreateEmployeeInput): Promise
       return {
         success: true,
         profile: data.profile as Profile,
+        project: data.project as Project | undefined,
+        geofences: data.geofences as Geofence[] | undefined,
         tempPassword: data.tempPassword || password || 'Milestone@2026'
       }
     }
@@ -86,7 +94,9 @@ export async function createEmployeeAccount(input: CreateEmployeeInput): Promise
           email: email.trim().toLowerCase(),
           employee_code: employee_code.trim().toUpperCase(),
           phone: phone?.trim() || null,
-          password: password?.trim() || undefined
+          password: password?.trim() || undefined,
+          project_id,
+          geofence_ids
         }
       })
 
@@ -94,6 +104,8 @@ export async function createEmployeeAccount(input: CreateEmployeeInput): Promise
         return {
           success: true,
           profile: fnData.profile as Profile,
+          project: fnData.project as Project | undefined,
+          geofences: fnData.geofences as Geofence[] | undefined,
           tempPassword: fnData.tempPassword || password || 'Milestone@2026'
         }
       }

@@ -78,16 +78,48 @@ export const EmployeeDashboardPage: React.FC = () => {
         const proj = validAssignment.project as unknown as Project
         setAssignedProject(proj)
 
-        // 2. Fetch active geofences for this project
-        const { data: geoData, error: geoErr } = await supabase
-          .from('geofences')
-          .select('*')
-          .eq('project_id', proj.id)
-          .eq('is_active', true)
-          .order('name', { ascending: true })
+        // 2. Fetch specific active geofences assigned to this employee
+        let assignedGeos: Geofence[] = []
+        try {
+          const { data: empGeoAssigns, error: empGeoAssignErr } = await supabase
+            .from('employee_geofence_assignments')
+            .select('geofence_id')
+            .eq('employee_id', user.id)
+            .eq('is_active', true)
 
-        if (geoErr) throw geoErr
-        setActiveGeofences(geoData || [])
+          if (!empGeoAssignErr && empGeoAssigns && empGeoAssigns.length > 0) {
+            const geoIds = empGeoAssigns.map((g) => g.geofence_id)
+            const { data: specificGeos, error: specGeoErr } = await supabase
+              .from('geofences')
+              .select('*')
+              .in('id', geoIds)
+              .eq('project_id', proj.id)
+              .eq('is_active', true)
+              .order('name', { ascending: true })
+
+            if (!specGeoErr && specificGeos) {
+              assignedGeos = specificGeos
+            }
+          }
+        } catch {
+          // Table in deployment transition
+        }
+
+        // Fallback: If no specific geofences assigned yet, permit all active project sites
+        if (assignedGeos.length === 0) {
+          const { data: fallbackGeoData, error: geoErr } = await supabase
+            .from('geofences')
+            .select('*')
+            .eq('project_id', proj.id)
+            .eq('is_active', true)
+            .order('name', { ascending: true })
+
+          if (!geoErr && fallbackGeoData) {
+            assignedGeos = fallbackGeoData
+          }
+        }
+
+        setActiveGeofences(assignedGeos)
       } else {
         setAssignedProject(null)
         setActiveGeofences([])
