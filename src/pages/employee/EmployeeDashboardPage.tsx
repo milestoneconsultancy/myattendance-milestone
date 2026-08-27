@@ -3,6 +3,12 @@ import { supabase } from '../../lib/supabaseClient'
 import { useAuth } from '../../hooks/useAuth'
 import { calculateHaversineDistance, isWithinGeofence } from '../../lib/geoUtils'
 import { logAuditEvent } from '../../lib/auditService'
+import {
+  validateEmployeeDevice,
+  bindCurrentDevice,
+  touchDeviceUsage,
+  type DeviceValidationResult
+} from '../../lib/deviceService'
 import type { Project, Geofence, DailyAttendance } from '../../types/database.types'
 import { LoadingSpinner } from '../../components/common/LoadingSpinner'
 import { GeofenceMap } from '../../components/map/GeofenceMap'
@@ -19,7 +25,8 @@ import {
   ShieldCheck,
   ShieldAlert,
   Radio,
-  Calendar
+  Calendar,
+  Smartphone
 } from 'lucide-react'
 
 export const EmployeeDashboardPage: React.FC = () => {
@@ -32,6 +39,10 @@ export const EmployeeDashboardPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null)
+
+  // Device Binding state
+  const [deviceValidation, setDeviceValidation] = useState<DeviceValidationResult | null>(null)
+  const [isBindingDevice, setIsBindingDevice] = useState(false)
 
   // Geolocation state
   const [currentPosition, setCurrentPosition] = useState<{
@@ -174,6 +185,10 @@ export const EmployeeDashboardPage: React.FC = () => {
         console.error('[EmployeeDashboard] Failed to fetch daily_attendance:', attendErr)
       }
       setTodayAttendance(attendData || null)
+
+      // 4. Validate device binding
+      const devResult = await validateEmployeeDevice(user.id)
+      setDeviceValidation(devResult)
     } catch (err) {
       console.error('[EmployeeDashboard] Error loading data:', err)
       setErrorMsg((err as Error).message || 'Failed to load assignment data.')
@@ -185,6 +200,42 @@ export const EmployeeDashboardPage: React.FC = () => {
   useEffect(() => {
     loadEmployeeData()
   }, [loadEmployeeData])
+
+  // Handle employee binding their current device
+  const handleBindDevice = async () => {
+    if (!user?.id) return
+    setIsBindingDevice(true)
+    setErrorMsg(null)
+    setActionSuccessMsg(null)
+
+    try {
+      const res = await bindCurrentDevice(user.id)
+      if (!res.success || !res.device) {
+        throw new Error(res.error || 'Failed to link device.')
+      }
+
+      await logAuditEvent({
+        actorId: user.id,
+        action: 'DEVICE_BIND',
+        entityType: 'devices',
+        entityId: res.device.id,
+        newData: {
+          employee_id: user.id,
+          device_id: res.device.device_id,
+          device_name: res.device.device_name
+        },
+        remark: `Employee linked device "${res.device.device_name}"`
+      })
+
+      setActionSuccessMsg(`Device (${res.device.device_name}) successfully linked to your account!`)
+      await loadEmployeeData()
+    } catch (err) {
+      console.error('[DeviceBinding] Error:', err)
+      setErrorMsg((err as Error).message || 'Failed to link device.')
+    } finally {
+      setIsBindingDevice(false)
+    }
+  }
 
   // Watch GPS Geolocation
   useEffect(() => {
@@ -261,6 +312,14 @@ export const EmployeeDashboardPage: React.FC = () => {
       setErrorMsg('Attendance blocked: Your employee account is currently deactivated.')
       return
     }
+    if (deviceValidation?.status === 'NO_DEVICE') {
+      setErrorMsg('Attendance blocked: You must link this device to your employee account before clocking in.')
+      return
+    }
+    if (deviceValidation?.status === 'MISMATCH') {
+      setErrorMsg(`Attendance blocked: Unauthorized device. Your account is locked to "${deviceValidation.boundDevice?.device_name || 'another device'}".`)
+      return
+    }
     if (!isInsideAnyGeofence) {
       setErrorMsg('Attendance blocked: You must be inside your designated site geofence to clock in.')
       return
@@ -279,6 +338,7 @@ export const EmployeeDashboardPage: React.FC = () => {
         employee_id: user.id,
         project_id: assignedProject.id,
         geofence_id: closestGeofence?.geofence.id || null,
+        device_id: deviceValidation?.currentDeviceId || null,
         event_type: 'SIGN_IN',
         event_time: nowIso,
         latitude: currentPosition.latitude,
@@ -315,6 +375,11 @@ export const EmployeeDashboardPage: React.FC = () => {
         if (insertErr) throw insertErr
       }
 
+      // 3. Touch device usage
+      if (deviceValidation?.currentDeviceId) {
+        await touchDeviceUsage(deviceValidation.currentDeviceId, user.id)
+      }
+
       await logAuditEvent({
         actorId: user.id,
         action: 'ATTENDANCE_CLOCK_IN',
@@ -323,12 +388,14 @@ export const EmployeeDashboardPage: React.FC = () => {
         newData: {
           project_id: assignedProject.id,
           project_name: assignedProject.name,
+          device_id: deviceValidation?.currentDeviceId,
+          device_name: deviceValidation?.currentDeviceName,
           latitude: currentPosition.latitude,
           longitude: currentPosition.longitude,
           closest_site: closestGeofence?.geofence.name,
           distance_meters: closestGeofence?.distanceMeters
         },
-        remark: `Clock In verified inside ${closestGeofence?.geofence.name || 'geofence'}`
+        remark: `Clock In verified inside ${closestGeofence?.geofence.name || 'geofence'} on ${deviceValidation?.currentDeviceName || 'device'}`
       })
 
       setActionSuccessMsg(`Successfully clocked in at ${closestGeofence?.geofence.name || assignedProject.name}!`)
@@ -346,6 +413,10 @@ export const EmployeeDashboardPage: React.FC = () => {
     if (!user?.id || !assignedProject || !todayAttendance?.sign_in_at || !currentPosition) return
     if (profile?.is_active === false) {
       setErrorMsg('Attendance blocked: Your employee account is currently deactivated.')
+      return
+    }
+    if (deviceValidation?.status === 'MISMATCH') {
+      setErrorMsg(`Attendance blocked: Unauthorized device. Your account is locked to "${deviceValidation.boundDevice?.device_name || 'another device'}".`)
       return
     }
     if (!isInsideAnyGeofence) {
@@ -368,6 +439,7 @@ export const EmployeeDashboardPage: React.FC = () => {
         employee_id: user.id,
         project_id: assignedProject.id,
         geofence_id: closestGeofence?.geofence.id || null,
+        device_id: deviceValidation?.currentDeviceId || null,
         event_type: 'SIGN_OUT',
         event_time: nowIso,
         latitude: currentPosition.latitude,
@@ -389,6 +461,11 @@ export const EmployeeDashboardPage: React.FC = () => {
 
       if (updateErr) throw updateErr
 
+      // 3. Touch device usage
+      if (deviceValidation?.currentDeviceId) {
+        await touchDeviceUsage(deviceValidation.currentDeviceId, user.id)
+      }
+
       await logAuditEvent({
         actorId: user.id,
         action: 'ATTENDANCE_CLOCK_OUT',
@@ -397,11 +474,13 @@ export const EmployeeDashboardPage: React.FC = () => {
         newData: {
           project_id: assignedProject.id,
           project_name: assignedProject.name,
+          device_id: deviceValidation?.currentDeviceId,
+          device_name: deviceValidation?.currentDeviceName,
           working_minutes: workingMinutes,
           latitude: currentPosition.latitude,
           longitude: currentPosition.longitude
         },
-        remark: `Clock Out recorded with duration ${workingMinutes} mins`
+        remark: `Clock Out recorded with duration ${workingMinutes} mins on ${deviceValidation?.currentDeviceName || 'device'}`
       })
 
       const hrs = Math.floor(workingMinutes / 60)
@@ -462,11 +541,31 @@ export const EmployeeDashboardPage: React.FC = () => {
                 })}
               </span>
             </div>
-            {profile?.employee_code && (
-              <span className="font-mono text-[11px] text-sky-200">
-                Staff ID: {profile.employee_code}
-              </span>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {profile?.employee_code && (
+                <span className="font-mono text-[11px] text-sky-200">
+                  Staff ID: {profile.employee_code}
+                </span>
+              )}
+              {deviceValidation && (
+                <span
+                  className={`inline-flex items-center gap-1 text-[11px] font-mono px-2.5 py-0.5 rounded-full border ${
+                    deviceValidation.status === 'MATCH'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                      : deviceValidation.status === 'MISMATCH'
+                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                      : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                  }`}
+                >
+                  <Smartphone className="h-3 w-3" />
+                  {deviceValidation.status === 'MATCH'
+                    ? 'Device Linked'
+                    : deviceValidation.status === 'MISMATCH'
+                    ? 'Unauthorized Device'
+                    : 'No Device Linked'}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -490,6 +589,46 @@ export const EmployeeDashboardPage: React.FC = () => {
         <div className="flex items-center gap-2 rounded-xl bg-amber-50 p-4 text-xs font-medium text-amber-800 border border-amber-200">
           <Radio className="h-4 w-4 shrink-0 text-amber-600 animate-pulse" />
           <span>{geoError}</span>
+        </div>
+      )}
+
+      {/* DEVICE BINDING ACTION BANNER (IF UNLINKED) */}
+      {deviceValidation?.status === 'NO_DEVICE' && (
+        <div className="rounded-2xl border border-sky-300 bg-sky-50/90 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="rounded-xl bg-sky-100 p-3 text-sky-700 shrink-0">
+              <Smartphone className="h-6 w-6" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-slate-900">Device Registration Required</h3>
+              <p className="text-xs text-slate-600 max-w-xl">
+                Your employee account is not yet linked to a device. For security and attendance integrity, please register this device (<span className="font-semibold text-slate-800">{deviceValidation.currentDeviceName}</span>) as your primary device.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleBindDevice}
+            disabled={isBindingDevice}
+            className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500/50 disabled:opacity-60 transition-all cursor-pointer shrink-0"
+          >
+            <ShieldCheck className="h-4 w-4" />
+            {isBindingDevice ? 'Linking Device...' : 'Link This Device'}
+          </button>
+        </div>
+      )}
+
+      {/* DEVICE MISMATCH ALERT (IF BOUND TO ANOTHER DEVICE) */}
+      {deviceValidation?.status === 'MISMATCH' && (
+        <div className="rounded-2xl border border-rose-300 bg-rose-50/90 p-5 sm:p-6 shadow-xs flex items-start gap-3.5">
+          <div className="rounded-xl bg-rose-100 p-3 text-rose-700 shrink-0">
+            <ShieldAlert className="h-6 w-6" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-rose-900">Device Lock Mismatch</h3>
+            <p className="text-xs text-rose-700 max-w-2xl">
+              Your attendance account is bound to "<span className="font-semibold">{deviceValidation.boundDevice?.device_name || 'another device'}</span>". Attendance cannot be recorded from this device (<span className="font-semibold">{deviceValidation.currentDeviceName}</span>). If you changed your phone or computer, please contact your Milestone system administrator to unbind your previous device.
+            </p>
+          </div>
         </div>
       )}
 
@@ -599,11 +738,11 @@ export const EmployeeDashboardPage: React.FC = () => {
       <div className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8 shadow-xs">
         <h2 className="text-base font-bold text-slate-900 mb-2">Punch Attendance</h2>
         <p className="text-xs text-slate-500 mb-6">
-          Attendance can only be recorded when your mobile/browser device GPS coordinates fall inside your assigned project site perimeter.
+          Attendance can only be recorded when your mobile/browser device GPS coordinates fall inside your assigned project site perimeter and on your authorized device.
         </p>
 
         {isLoading ? (
-          <LoadingSpinner message="Checking project assignment..." />
+          <LoadingSpinner message="Checking project assignment and device..." />
         ) : !assignedProject ? (
           <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50/50 p-6 text-center">
             <ShieldAlert className="h-8 w-8 text-amber-500 mx-auto mb-2" />
@@ -629,12 +768,13 @@ export const EmployeeDashboardPage: React.FC = () => {
                 isClockingIn ||
                 Boolean(todayAttendance?.sign_in_at) ||
                 !isInsideAnyGeofence ||
-                isLocating
+                isLocating ||
+                deviceValidation?.status !== 'MATCH'
               }
               className={`flex flex-col items-center justify-center gap-2 rounded-2xl p-6 transition-all border shadow-sm ${
                 todayAttendance?.sign_in_at
                   ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed'
-                  : isInsideAnyGeofence
+                  : isInsideAnyGeofence && deviceValidation?.status === 'MATCH'
                   ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 cursor-pointer shadow-md'
                   : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
               }`}
@@ -647,8 +787,12 @@ export const EmployeeDashboardPage: React.FC = () => {
                 <span className="text-[11px] opacity-80 block mt-0.5">
                   {todayAttendance?.sign_in_at
                     ? `Recorded at ${new Date(todayAttendance.sign_in_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
+                    : deviceValidation?.status === 'NO_DEVICE'
+                    ? 'Requires Device Registration'
+                    : deviceValidation?.status === 'MISMATCH'
+                    ? 'Locked to another device'
                     : isInsideAnyGeofence
-                    ? 'GPS Verified Inside Geofence'
+                    ? 'GPS & Device Verified'
                     : 'Requires GPS inside site perimeter'}
                 </span>
               </div>
@@ -662,12 +806,13 @@ export const EmployeeDashboardPage: React.FC = () => {
                 !todayAttendance?.sign_in_at ||
                 Boolean(todayAttendance?.sign_out_at) ||
                 !isInsideAnyGeofence ||
-                isLocating
+                isLocating ||
+                deviceValidation?.status !== 'MATCH'
               }
               className={`flex flex-col items-center justify-center gap-2 rounded-2xl p-6 transition-all border shadow-sm ${
                 todayAttendance?.sign_out_at
                   ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed'
-                  : todayAttendance?.sign_in_at && isInsideAnyGeofence
+                  : todayAttendance?.sign_in_at && isInsideAnyGeofence && deviceValidation?.status === 'MATCH'
                   ? 'bg-sky-600 hover:bg-sky-700 text-white border-sky-700 cursor-pointer shadow-md'
                   : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
               }`}
@@ -686,8 +831,10 @@ export const EmployeeDashboardPage: React.FC = () => {
                     ? `Recorded at ${new Date(todayAttendance.sign_out_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
                     : !todayAttendance?.sign_in_at
                     ? 'Must Clock In first'
+                    : deviceValidation?.status === 'MISMATCH'
+                    ? 'Locked to another device'
                     : isInsideAnyGeofence
-                    ? 'GPS Verified Inside Geofence'
+                    ? 'GPS & Device Verified'
                     : 'Requires GPS inside site perimeter'}
                 </span>
               </div>
