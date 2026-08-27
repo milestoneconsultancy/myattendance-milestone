@@ -204,3 +204,4 @@ export async function touchDeviceUsage(deviceId: string, employeeId: string): Pr
     // Non-fatal timestamp touch
   }
 }
+
